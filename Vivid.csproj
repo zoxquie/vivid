@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Build on Windows:  dotnet build -c Release      (output: bin\Release\net48\Vivid.exe)
+    Targets .NET Framework 4.8, which ships with Windows 10 and 11, so the exe needs no installer.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Vivid</AssemblyName>
+    <RootNamespace>Vivid</RootNamespace>
+    <ApplicationIcon>assets\vivid.ico</ApplicationIcon>
+    <ApplicationManifest>src\app.manifest</ApplicationManifest>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <AppendTargetFrameworkToOutputPath>true</AppendTargetFrameworkToOutputPath>
+    <Nullable>disable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <!-- Building on Linux/macOS with Mono's reference assemblies (no NuGet needed). -->
+  <PropertyGroup Condition="'$(OS)' != 'Windows_NT' And Exists('/usr/lib/mono/4.8-api')">
+    <FrameworkPathOverride>/usr/lib/mono/4.8-api</FrameworkPathOverride>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src\*.cs" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <!-- Optional default screenshots: assets\presets\grass.jpg, winter.jpg, desert.jpg, night-vision.jpg, vibrant.jpg, custom.jpg, preview.jpg -->
+  <ItemGroup>
+    <EmbeddedResource Include="assets\presets\*.jpg;assets\presets\*.jpeg;assets\presets\*.png;assets\presets\*.bmp">
+      <LogicalName>preset.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+</Project>

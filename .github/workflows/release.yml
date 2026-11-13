@@ -1,0 +1,47 @@
+name: Build and release
+
+# Push a tag like v1.3.1 to publish a new version. Every copy of Vivid picks it up automatically.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install .NET Framework reference assemblies (Mono)
+        run: sudo apt-get update -q && sudo apt-get install -y -q mono-devel xvfb
+
+      - name: Set the version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          sed -i -E "s/(public const string Version = \")[0-9.]+(\";)/\1${v}\2/" src/AppInfo.cs
+          grep -n "public const string Version" src/AppInfo.cs
+
+      - name: Build
+        run: bash build.sh
+
+      - name: Test
+        run: bash tests/run.sh
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" bin/Vivid.exe \
+            --title "Vivid ${GITHUB_REF_NAME#v}" \
+            --generate-notes
+
+      - name: Keep the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vivid
+          path: bin/Vivid.exe

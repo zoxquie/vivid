@@ -1,0 +1,6 @@
+bin/
+*.exe
+*.old
+*.download
+mono_crash.*
+__pycache__/
