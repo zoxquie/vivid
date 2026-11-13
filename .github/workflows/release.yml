@@ -1,8 +1,9 @@
 name: Build and release
 
 # Releasing = raise the version in src/AppInfo.cs and push to main.
-# When main has a version that hasn't been released yet, this builds Vivid.exe and publishes
-# release vX.Y.Z with it. Every copy of Vivid picks the new release up by itself.
+# When main has a version that hasn't been released yet, this builds Fjord Vision and publishes
+# release vX.Y.Z. Installed copies download the Vivid.exe asset (the pre-rebrand file name the
+# updater looks for); Fjord-Vision.exe is the same file under the new name, for fresh downloads.
 on:
   push:
     branches: [main]
@@ -51,4 +52,5 @@ jobs:
         if: steps.v.outputs.new == 'true'
         run: |
           v="${{ steps.v.outputs.version }}"
-          gh release create "v$v" bin/Vivid.exe --target "$GITHUB_SHA" --title "Vivid $v" --generate-notes
+          cp bin/Vivid.exe bin/Fjord-Vision.exe
+          gh release create "v$v" bin/Fjord-Vision.exe bin/Vivid.exe --target "$GITHUB_SHA" --title "Fjord Vision $v" --generate-notes

@@ -1,16 +1,20 @@
-# Vivid — screen color filters for games
+<p align="center"><img src="assets/brand/mark.png" width="96" alt="Fjord Vision logo"></p>
 
-Vivid changes the colors of your whole screen, the way the old NVIDIA game filters worked: brightness, contrast, saturation, hue and a night-vision shadow lift. It has built-in presets, your own profiles, hotkeys that work in game, and a black holo for Rust.
+# Fjord Vision — screen color filters for games
 
-Vivid only changes colors at the display level. It never opens, reads or modifies a game's files or memory, and it doesn't inject anything into a game. The black holo works from what's on your screen, like recording or streaming software does.
+By [fjord.wtf](https://fjord.wtf). Formerly called Vivid.
+
+Fjord Vision changes the colors of your whole screen, the way the old NVIDIA game filters worked: brightness, contrast, saturation, hue and a night-vision shadow lift. It has built-in presets, your own profiles, hotkeys that work in game, and a black holo for Rust.
+
+Fjord Vision only changes colors at the display level. It never opens, reads or modifies a game's files or memory, and it doesn't inject anything into a game. The black holo works from what's on your screen, like recording or streaming software does.
 
 ## Running it
 
-1. Download `Vivid.exe` from the [latest release](https://github.com/zoxquie/vivid/releases/latest) and double-click it. There's nothing to install. It needs 64-bit Windows 10 or 11 (it uses the .NET Framework 4.8 that comes with Windows). Keep it in a folder you own, like Downloads or Documents, so it can update itself.
+1. Download `Fjord-Vision.exe` from the [latest release](https://github.com/zoxquie/vivid/releases/latest) and double-click it. There's nothing to install. It needs 64-bit Windows 10 or 11 (it uses the .NET Framework 4.8 that comes with Windows). Keep it in a folder you own, like Downloads or Documents, so it can update itself.
 2. The exe isn't code-signed, so Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
 3. Pick a preset or move the sliders. Changes show in the **Preview** first: **Before** is the picture with no filter, **After** is the preset or edits you're looking at (drag the line to compare). Press **Apply** to put them on screen and save them, or **Discard** to drop them. Turn on **Apply instantly** to skip that step. Hotkeys and the tray menu always apply straight away.
 
-Closing the window keeps Vivid running in the tray so your filters stay on. To quit, right-click the tray icon and choose **Quit**. Quitting always puts your screen back to normal.
+Closing the window keeps Fjord Vision running in the tray so your filters stay on. To quit, right-click the tray icon and choose **Quit**. Quitting always puts your screen back to normal.
 
 ## Features
 
@@ -24,8 +28,8 @@ Closing the window keeps Vivid running in the tray so your filters stay on. To q
   - `Ctrl+F8`: black holo on/off
 
   Each profile can also have its own key. Pressing that key a second time turns filters off, so it's easy to compare with and without filters.
-- **Black holo (Rust):** The **Holo** tab turns the holosight's red reticle black on screen, in hip fire and when aiming. Every frame Vivid looks at the middle of the screen, finds the reticle's pixels and covers them on a click-through overlay that's left out of screen captures. Pick the reticle color you use in Rust, what it turns into (black by default), how big an area to watch, and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode.
-- **Automatic updates:** Vivid checks this repository's releases, downloads the new `Vivid.exe` and swaps it in place. A **Restart to update** button appears when it's ready. Turn it off or check by hand in **Settings → Updates**.
+- **Black holo (Rust):** The **Holo** tab turns the holosight's red reticle black on screen, in hip fire and when aiming. Every frame Fjord Vision looks at the middle of the screen, finds the reticle's pixels and covers them on a click-through overlay that's left out of screen captures. Pick the reticle color you use in Rust, what it turns into (black by default), how big an area to watch, and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode.
+- **Automatic updates:** Fjord Vision checks this repository's releases, downloads the new version and swaps it in place, whatever you named the file. A **Restart to update** button appears when it's ready. Turn it off or check by hand in **Settings → Updates**.
 - **On-screen messages:** A short message appears when a hotkey switches something while you're in game.
 - **Tray, start with Windows, start minimized, single instance.**
 
@@ -34,7 +38,7 @@ Closing the window keeps Vivid running in the tray so your filters stay on. To q
 The preset cards and the live preview can show your own game screenshots instead of the built-in artwork.
 
 - **In the app:** open a preset's ⋯ menu and choose **Set card image…**. To change the preview, right-click it and choose **Use my own screenshot…**, or use **Settings → Preview screenshot**. Your choices are saved in `%AppData%\Vivid\images`.
-- **For everyone who runs your copy:** create an `images` folder next to `Vivid.exe` and put screenshots in it named `grass.jpg`, `winter.jpg`, `desert.jpg`, `night-vision.jpg`, `custom.jpg` or `preview.jpg`.
+- **For everyone who runs your copy:** create an `images` folder next to the exe and put screenshots in it named `grass.jpg`, `winter.jpg`, `desert.jpg`, `night-vision.jpg`, `custom.jpg` or `preview.jpg`.
 - **Built into the exe:** put the same files in `assets/presets` and rebuild.
 
 Any preset without an image keeps the generated artwork.
@@ -50,13 +54,13 @@ Any preset without an image keeps the generated artwork.
 | Night vision | Yes (always uses the gamma ramp) | Yes |
 | Exclusive fullscreen games | Usually no; run the game in borderless or windowed mode | Yes |
 
-**Strong night vision limited?** By default Windows limits how far gamma curves can move. Vivid applies the strongest curve Windows accepts and tells you when it's capped. **Settings → Full gamma range → Unlock** sets the `GdiIcmGammaRange` registry value. This needs admin approval and a restart.
+**Strong night vision limited?** By default Windows limits how far gamma curves can move. Fjord Vision applies the strongest curve Windows accepts and tells you when it's capped. **Settings → Full gamma range → Unlock** sets the `GdiIcmGammaRange` registry value. This needs admin approval and a restart.
 
 ## Safety
 
-- Vivid records what it changed before it changes the display. If it ever crashes, the next launch puts your gamma and NVIDIA vibrance back the way they were. The screen-matrix effect ends on its own when the process exits.
+- Fjord Vision records what it changed before it changes the display. If it ever crashes, the next launch puts your gamma and NVIDIA vibrance back the way they were. The screen-matrix effect ends on its own when the process exits.
 - **Settings → Restore normal colors** resets everything right away.
-- Settings live in `%AppData%\Vivid\settings.json`. Errors, if any, are written to `error.log` in the same folder.
+- Settings live in `%AppData%\Vivid\settings.json` (the folder kept its old name so nothing is lost when you update). Errors, if any, are written to `error.log` in the same folder.
 - Overlays and color filters are generally allowed, but every game sets its own rules. Check yours if you're unsure.
 
 ## Building from source
@@ -88,15 +92,22 @@ Code layout:
 | `src/Holo.cs` | The black holo: finding the reticle's pixels and the overlay that recolors them |
 | `src/Overlays.cs` | The click-through overlay window and the on-screen messages |
 | `src/AppController.cs` | App state, profiles and hotkeys |
+| `src/AppInfo.cs` | Name, version, fjord.wtf link and the GitHub repo used for updates |
 | `src/MainForm.cs`, `src/Pages.cs`, `src/Layout.cs`, `src/Widgets.cs` | The custom-drawn UI |
 
 ## Releasing a new version
 
-Releases are built by GitHub Actions, and every copy of Vivid updates itself from the latest one.
+Releases are built by GitHub Actions, and every copy of Fjord Vision (and of Vivid 1.3 and later) updates itself from the latest one.
 
-1. Raise `Version` in `src/AppInfo.cs` (for example `1.4.0` → `1.4.1`).
+1. Raise `Version` in `src/AppInfo.cs` (for example `1.5.0` → `1.5.1`).
 2. Commit and push to `main`.
 
-The workflow sees a version that hasn't been released yet, builds `Vivid.exe` with `build.sh`, runs the tests and publishes release `v1.4.1` with the exe attached. Pushes that don't change the version don't publish anything.
+The workflow sees a version that hasn't been released yet, builds with `build.sh`, runs the tests and publishes release `v1.5.1` with two copies of the exe: `Fjord-Vision.exe` for new downloads and `Vivid.exe`, the name the built-in updater looks for. Pushes that don't change the version don't publish anything.
+
+## Branding
+
+The logo is `assets/brand/fjord-logo.jpg`. `python3 tools/make_icon.py` makes the app icon (`assets/fjord-vision.ico`), the window and tray icon (`assets/brand/window.ico`) and the badge drawn in the app (`assets/brand/mark.png`) from it.
+
+Inside the code the app is still called Vivid: the assembly, the `Vivid.exe` build output, the `%AppData%\Vivid` folder and the single-instance names. Keep them, or copies installed before the rebrand stop updating.
 
 To build locally on Linux: `apt install dotnet-sdk-8.0 mono-devel`, then `./build.sh` (tests: `tests/run.sh`).

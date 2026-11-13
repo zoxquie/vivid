@@ -7,7 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 
-[assembly: AssemblyDescription("Screen color filters, presets, hotkeys and a black holo for Rust")]
+[assembly: AssemblyDescription("Screen color filters, presets, hotkeys and a black holo for Rust. By fjord.wtf")]
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
 
 namespace Vivid
@@ -18,12 +18,41 @@ namespace Vivid
         static AppController ctl;
         static Icon appIcon;
 
+        static Icon trayIcon;
+
+        /// <summary>The fjord icon built into the exe, at a given size (null = the icon's default size).</summary>
+        static Icon BrandIcon(Size? size)
+        {
+            try
+            {
+                using (var s = typeof(Program).Assembly.GetManifestResourceStream("brand.icon.ico"))
+                {
+                    if (s == null) return null;
+                    var ms = new MemoryStream();
+                    s.CopyTo(ms);
+                    ms.Position = 0;
+                    return size.HasValue ? new Icon(ms, size.Value) : new Icon(ms);
+                }
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Small icon for the tray, taken from the icon's own 16/20/24 px art instead of a scaled-down 32.</summary>
+        public static Icon TrayIcon => trayIcon ?? (trayIcon = BrandIcon(SystemInformation.SmallIconSize));
+
+        public static void OpenSite()
+        {
+            try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(AppInfo.Site) { UseShellExecute = true }); }
+            catch (Exception ex) { Log(ex); Ui.Form?.ShowToast("Couldn't open " + AppInfo.SiteLabel); }
+        }
+
         public static Icon AppIcon
         {
             get
             {
                 if (appIcon != null) return appIcon;
-                try { if (Native.IsWindows) appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+                appIcon = BrandIcon(null);
+                if (appIcon == null) try { if (Native.IsWindows) appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
                 if (appIcon == null)
                 {
                     using (var bmp = new Bitmap(64, 64))

@@ -47,7 +47,7 @@ namespace Vivid
             Ui.Form = this;
             allowShow = !startHidden;
 
-            Text = "Vivid";
+            Text = AppInfo.Name;
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Theme.Bg;
@@ -83,13 +83,13 @@ namespace Vivid
             {
                 if (IsDisposed) return;
                 DoLayout(); Invalidate();
-                if (Updater.Status == Updater.State.Ready) ShowToast("Vivid " + Updater.ReadyVersion + " is ready. Restart to use it.");
+                if (Updater.Status == Updater.State.Ready) ShowToast(AppInfo.Name + " " + Updater.ReadyVersion + " is ready. Restart to use it.");
             };
             Ctl.StructureChanged += () => { if (!IsDisposed) { pages[PageId.Filters].Build(); DoLayout(); Invalidate(); } };
             Ctl.Toast += ShowToast;
             Ctl.ShowWindowRequested = () => { if (Visible && WindowState != FormWindowState.Minimized && ContainsFocus) HideToTray(); else ShowFromTray(); };
 
-            tray = new NotifyIcon { Text = "Vivid", Icon = Icon ?? SystemIcons.Application, Visible = Native.IsWindows };
+            tray = new NotifyIcon { Text = AppInfo.Name, Icon = Program.TrayIcon ?? Icon ?? SystemIcons.Application, Visible = Native.IsWindows };
             tray.MouseClick += (s, e) => { if (e.Button == MouseButtons.Left) ShowFromTray(); };
             tray.ContextMenuStrip = BuildTrayMenu();
 
@@ -172,7 +172,7 @@ namespace Vivid
             {
                 Ctl.Settings.TrayHintShown = true;
                 Ctl.SaveSoon();
-                tray.ShowBalloonTip(3000, "Vivid is still running", "Filters and hotkeys stay active. Open Vivid from the tray icon.", ToolTipIcon.Info);
+                tray.ShowBalloonTip(3000, AppInfo.Name + " is still running", "Filters and hotkeys stay active. Open " + AppInfo.Name + " from the tray icon.", ToolTipIcon.Info);
             }
         }
 
@@ -734,7 +734,7 @@ namespace Vivid
             var m = NewMenu();
             var sel = Ctl.Selected;
             m.Items.Add("Export \"" + sel.Name + "\"…", null, (s, e) => ExportProfiles(new[] { sel }, sel.Name));
-            var all = m.Items.Add("Export all my profiles…", null, (s, e) => ExportProfiles(Ctl.UserProfiles, "Vivid profiles"));
+            var all = m.Items.Add("Export all my profiles…", null, (s, e) => ExportProfiles(Ctl.UserProfiles, AppInfo.Name + " profiles"));
             all.Enabled = Ctl.UserProfiles.Count > 0;
             m.Items.Add(new ToolStripSeparator());
             m.Items.Add("Copy share code for \"" + sel.Name + "\"", null, (s, e) => CopyShareCode(sel));
@@ -751,7 +751,7 @@ namespace Vivid
         void ExportProfiles(IEnumerable<Profile> list, string suggested)
         {
             var items = list.Select(p => new Profile { Name = p.Name, Values = (p.Id == Presets.CustomId ? Ctl.Settings.Custom : p.Values).Clone() }).ToList();
-            using (var dlg = new SaveFileDialog { Filter = "Vivid profiles (*.json)|*.json", FileName = MakeFileName(suggested) + ".json", Title = "Export profiles" })
+            using (var dlg = new SaveFileDialog { Filter = AppInfo.Name + " profiles (*.json)|*.json", FileName = MakeFileName(suggested) + ".json", Title = "Export profiles" })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 try { File.WriteAllText(dlg.FileName, Storage.ExportJson(items)); ShowToast(items.Count == 1 ? "Profile exported" : $"{items.Count} profiles exported"); }
@@ -767,7 +767,7 @@ namespace Vivid
 
         void ImportFromFile()
         {
-            using (var dlg = new OpenFileDialog { Filter = "Vivid profiles (*.json)|*.json|All files (*.*)|*.*", Multiselect = true, Title = "Import profiles" })
+            using (var dlg = new OpenFileDialog { Filter = AppInfo.Name + " profiles (*.json)|*.json|All files (*.*)|*.*", Multiselect = true, Title = "Import profiles" })
             {
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 int n = 0;
@@ -797,7 +797,7 @@ namespace Vivid
             m.Opening += (s, e) =>
             {
                 m.Items.Clear();
-                var open = m.Items.Add("Open Vivid", null, (a, b) => ShowFromTray());
+                var open = m.Items.Add("Open " + AppInfo.Name, null, (a, b) => ShowFromTray());
                 open.Font = new Font(m.Font, FontStyle.Bold);
                 m.Items.Add(new ToolStripSeparator());
                 var f = new ToolStripMenuItem("Filters on", null, (a, b) => Ctl.SetFiltersOn(!Ctl.Settings.FiltersOn)) { Checked = Ctl.Settings.FiltersOn };
@@ -816,6 +816,7 @@ namespace Vivid
                 ((ToolStripDropDownMenu)prof.DropDown).ShowCheckMargin = true;
                 m.Items.Add(prof);
                 m.Items.Add(new ToolStripSeparator());
+                m.Items.Add("Visit " + AppInfo.SiteLabel, null, (a, b) => Program.OpenSite());
                 m.Items.Add("Quit", null, (a, b) => ExitApp());
                 e.Cancel = false;
             };

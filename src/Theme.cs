@@ -347,7 +347,49 @@ namespace Vivid
         }
 
         /// <summary>The app logo: a glowing prism ring.</summary>
+        static Bitmap mark;
+        static bool markLoaded;
+
+        /// <summary>The fjord "F" badge built into the exe (assets/brand/mark.png), or null in builds without it.</summary>
+        public static Bitmap Mark
+        {
+            get
+            {
+                if (markLoaded) return mark;
+                markLoaded = true;
+                try
+                {
+                    using (var s = typeof(Theme).Assembly.GetManifestResourceStream("brand.mark.png"))
+                        if (s != null) using (var img = Image.FromStream(s)) mark = new Bitmap(img);
+                }
+                catch { mark = null; }
+                return mark;
+            }
+        }
+
+        /// <summary>The fjord logo badge with a soft mint glow behind it.</summary>
         public static void DrawLogo(Graphics g, RectangleF r, bool glow = true)
+        {
+            var m = Mark;
+            if (m == null) { DrawRingLogo(g, r, glow); return; }
+            if (glow) RadialGlow(g, new PointF(r.X + r.Width / 2, r.Y + r.Height * 0.55f), r.Width * 1.15f, r.Height * 1.0f, Accent, 55);
+            RenderCache.Draw(g, RenderCache.Key("logo", r.Width, r.Height), r, gg =>
+            {
+                var im = gg.InterpolationMode; var pom = gg.PixelOffsetMode; var cq = gg.CompositingQuality;
+                gg.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                gg.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                gg.CompositingQuality = CompositingQuality.HighQuality;
+                gg.DrawImage(m, r);
+                gg.InterpolationMode = im; gg.PixelOffsetMode = pom; gg.CompositingQuality = cq;
+            });
+            // thin mint rim so the dark badge doesn't sink into the dark title bar
+            var sm = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            StrokeRound(g, RectangleF.Inflate(r, -0.5f, -0.5f), r.Width * 0.24f, WithAlpha(Accent, 60), Math.Max(1, Scale));
+            g.SmoothingMode = sm;
+        }
+
+        static void DrawRingLogo(Graphics g, RectangleF r, bool glow)
         {
             var sm = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;

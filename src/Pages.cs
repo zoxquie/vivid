@@ -562,7 +562,7 @@ namespace Vivid
 
         public override bool Interactive => true;
         public override Cursor Cursor => Cursors.SizeWE;
-        public override string Tooltip => dragging ? null : "Before: the holo as Rust draws it. After: what Vivid turns it into. Drag to compare.";
+        public override string Tooltip => dragging ? null : "Before: the holo as Rust draws it. After: what " + AppInfo.Name + " turns it into. Drag to compare.";
         public override void MouseDown(PointF p, MouseButtons b) { if (b == MouseButtons.Left) { dragging = true; Move(p); } }
         public override void MouseDrag(PointF p) { if (dragging) Move(p); }
         public override void MouseUp(PointF p, bool inside, MouseButtons b) { dragging = false; }
@@ -865,17 +865,17 @@ namespace Vivid
             keys.AddRow(KeyRow("Filters on / off", "Turns every filter off and back on.", () => s.ToggleFiltersKey, "filters"));
             keys.AddRow(KeyRow("Next profile", "Cycles through Custom, the built-in presets and your profiles.", () => s.NextProfileKey, "next"));
             keys.AddRow(KeyRow("Black holo on / off", "Turns the Rust black holo on or off.", () => s.ToggleHoloKey, "holo"));
-            keys.AddRow(KeyRow("Show / hide Vivid", "Brings this window up from the tray.", () => s.ShowWindowKey, "window"));
-            keys.FooterNote = () => "Hotkeys work while you play. A key bound here is reserved for Vivid, so pick keys your game doesn't use. Each profile can also get its own key from its ⋯ menu." +
+            keys.AddRow(KeyRow("Show / hide " + AppInfo.Name, "Brings this window up from the tray.", () => s.ShowWindowKey, "window"));
+            keys.FooterNote = () => "Hotkeys work while you play. A key bound here is reserved for " + AppInfo.Name + ", so pick keys your game doesn't use. Each profile can also get its own key from its ⋯ menu." +
                 (Ctl.HotkeyFailures.Count > 0 ? "  Already used by another app: " + string.Join(", ", Ctl.HotkeyFailures) + "." : "");
             sections.Add(scroll.Add(keys));
 
             var beh = new Section("App", "Behavior", Icons.Gear, Theme.Green);
-            beh.AddRow(new ControlRow("Launch with Windows", () => "Start Vivid in the tray when you sign in, with your last profile applied.",
+            beh.AddRow(new ControlRow("Launch with Windows", () => "Start " + AppInfo.Name + " in the tray when you sign in, with your last profile applied.",
                 new Toggle { Get = () => s.StartWithWindows, Set = v => Ctl.SetStartWithWindows(v) }, 44, 24));
             beh.AddRow(new ControlRow("Start minimized", () => "Open straight to the tray instead of showing this window.",
                 new Toggle { Get = () => s.StartMinimized, Set = v => { s.StartMinimized = v; Ctl.SaveSoon(); } }, 44, 24));
-            beh.AddRow(new ControlRow("Keep running in the tray", () => "The close button hides Vivid so your filters stay on. Quit from the tray menu.",
+            beh.AddRow(new ControlRow("Keep running in the tray", () => "The close button hides " + AppInfo.Name + " so your filters stay on. Quit from the tray menu.",
                 new Toggle { Get = () => s.CloseToTray, Set = v => { s.CloseToTray = v; Ctl.SaveSoon(); Ui.Form.Invalidate(); } }, 44, 24));
             beh.AddRow(new ControlRow("On-screen messages", () => "Show a short message at the top of the screen when a hotkey changes something.",
                 new Toggle { Get = () => s.ShowOsd, Set = v => { s.ShowOsd = v; Ctl.SaveSoon(); } }, 44, 24));
@@ -889,13 +889,13 @@ namespace Vivid
                 new Button { Text = "Choose…", Style = BtnStyle.Secondary, OnClick = () => Ui.Form.PickPreviewImage() }, 110, 38));
             maint.AddRow(new ControlRow("Settings folder", () => Storage.Folder,
                 new Button { Text = "Open", Style = BtnStyle.Secondary, Icon = Icons.Folder, IconSize = 16, OnClick = OpenFolder }, 110, 38));
-            maint.AddRow(new ControlRow("About", () => "Vivid " + Program.Version + ". Changes colors at the display level only. It never reads or modifies game files or game memory.",
-                new Panel(), 0, 0));
+            maint.AddRow(new ControlRow("About", () => AppInfo.Name + " " + Program.Version + ", made by fjord. Changes colors at the display level only. It never reads or modifies game files or game memory.",
+                new Button { Text = AppInfo.SiteLabel, Style = BtnStyle.Secondary, Icon = Icons.Link, IconSize = 16, Hint = "Open " + AppInfo.Site, OnClick = Program.OpenSite }, 120, 38));
             sections.Add(scroll.Add(maint));
 
             var upd = new Section("Updates", "Stay up to date", Icons.Reset, Theme.Green);
             upd.AddRow(new ControlRow("Update automatically",
-                () => "Vivid checks GitHub (" + AppInfo.Repo + ") for new versions and swaps the new one in by itself. Nothing to reinstall.",
+                () => AppInfo.Name + " checks GitHub (" + AppInfo.Repo + ") for new versions and swaps the new one in by itself. Nothing to reinstall.",
                 new Toggle { Get = () => s.AutoUpdate, Set = v => { s.AutoUpdate = v; Ctl.SaveSoon(); if (v) Updater.CheckAsync(); Ui.Invalidate(); } }, 44, 24));
             upd.AddRow(new ControlRow("Version " + AppInfo.Version,
                 () => string.IsNullOrEmpty(Updater.Detail) ? "Not checked yet this session." : Updater.Detail,
@@ -948,7 +948,7 @@ namespace Vivid
 
         public override void Paint(Graphics g)
         {
-            PaintHeader(g, "Settings", "How Vivid applies filters, your hotkeys and startup behavior.");
+            PaintHeader(g, "Settings", "How " + AppInfo.Name + " applies filters, your hotkeys and startup behavior.");
             base.Paint(g);
         }
     }

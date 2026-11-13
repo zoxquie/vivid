@@ -284,7 +284,7 @@ namespace Vivid
             settings.IconColorFn = () => Ui.Form.Current == PageId.Settings ? Theme.AccentHover : Theme.TextMuted;
             power = Add(new PowerButton { Icon = Icons.Power, Style = BtnStyle.Subtle, IconSize = 19, OnClick = () => Ctl.SetFiltersOn(!Ctl.Settings.FiltersOn) });
             power.IconColorFn = () => Ctl.Settings.FiltersOn ? Theme.Green : Theme.Red;
-            update = Add(new Button { Text = "Restart to update", Icon = Icons.Reset, IconSize = 15, Style = BtnStyle.Primary, Radius = 10, Hint = "A new version of Vivid is installed", OnClick = Updater.RestartNow });
+            update = Add(new Button { Text = "Restart to update", Icon = Icons.Reset, IconSize = 15, Style = BtnStyle.Primary, Radius = 10, Hint = "A new version of " + AppInfo.Name + " is installed", OnClick = Updater.RestartNow });
             wMin = Add(new Button { Icon = Icons.WinMin, Style = BtnStyle.Ghost, Radius = 8, IconSize = 18, OnClick = () => Ui.Form.WindowState = FormWindowState.Minimized });
             wMax = Add(new Button { Icon = Icons.WinMax, Style = BtnStyle.Ghost, Radius = 8, IconSize = 18, OnClick = () => Ui.Form.ToggleMaximize() });
             wClose = Add(new CloseButton { Icon = Icons.WinClose, Style = BtnStyle.Ghost, Radius = 8, IconSize = 18, OnClick = () => Ui.Form.Close() });
@@ -328,7 +328,7 @@ namespace Vivid
             Bounds = r;
             float cy = r.Y + r.Height / 2;
             float x = 24 * S;
-            float tabsX = 62 * S + Theme.Measure("Vivid", Theme.F(20, semibold: true)).Width + 26 * S;
+            float tabsX = 64 * S + Theme.Measure(AppInfo.Name, Theme.F(20, semibold: true)).Width + 26 * S;
             float tw1 = Theme.Measure("Filters", Theme.F(13.5f, true)).Width + 62 * S;
             float tw2 = Theme.Measure("Holo", Theme.F(13.5f, true)).Width + 62 * S;
             tabsBg.Bounds = new RectangleF(tabsX, cy - 22 * S, tw1 + tw2 + 10 * S, 44 * S);
@@ -399,8 +399,8 @@ namespace Vivid
                 using (var p = new Pen(lg, Math.Max(1, S))) g.DrawLine(p, 0, r.Bottom - 0.5f, r.Right, r.Bottom - 0.5f);
             }
             float cy = r.Y + r.Height / 2;
-            Theme.DrawLogo(g, new RectangleF(24 * S, cy - 14 * S, 28 * S, 28 * S));
-            Theme.GradientTitle(g, "Vivid", 20, new PointF(62 * S, cy - 13 * S), Theme.Text, Theme.AccentHover);
+            Theme.DrawLogo(g, new RectangleF(22 * S, cy - 16 * S, 32 * S, 32 * S));
+            Theme.GradientTitle(g, AppInfo.Name, 20, new PointF(64 * S, cy - 13 * S), Theme.Text, Theme.AccentHover);
             using (var p = new Pen(Theme.White(22), Math.Max(1, S)))
             {
                 float sx = wMin.Bounds.X - 14 * S;

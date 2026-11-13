@@ -108,7 +108,7 @@ namespace Vivid
             if (size > 0 && new FileInfo(TempPath).Length != size) throw new InvalidDataException("the download was incomplete");
             var name = AssemblyName.GetAssemblyName(TempPath);
             if (!string.Equals(name.Name, "Vivid", StringComparison.OrdinalIgnoreCase) || name.Version < latest)
-                throw new InvalidDataException("the downloaded file isn't Vivid " + v);
+                throw new InvalidDataException("the downloaded file isn't " + AppInfo.Name + " " + v);
 
             // Swap: running exe → Vivid.exe.old, download → Vivid.exe. Put it back if the second step fails.
             if (File.Exists(OldPath)) File.Delete(OldPath);
@@ -117,7 +117,7 @@ namespace Vivid
             catch { File.Move(OldPath, ExePath); throw; }
 
             ReadyVersion = v;
-            Set(State.Ready, "Version " + v + " is installed. Restart Vivid to use it.");
+            Set(State.Ready, "Version " + v + " is installed. Restart " + AppInfo.Name + " to use it.");
         }
 
         static Dictionary<string, object> Fetch(string url)
@@ -166,7 +166,7 @@ namespace Vivid
 
         static string Short(Exception ex)
         {
-            if (ex is UnauthorizedAccessException) return "Vivid's folder is read-only. Move Vivid.exe to a folder you own (like Downloads or Documents).";
+            if (ex is UnauthorizedAccessException) return AppInfo.Name + "'s folder is read-only. Move the app to a folder you own (like Downloads or Documents).";
             if (ex is WebException) return "no internet connection or GitHub didn't answer.";
             return ex.Message.TrimEnd('.') + ".";
         }

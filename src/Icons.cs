@@ -267,6 +267,17 @@ namespace Vivid
             using (var p = MakePen(r, c)) Poly(g, p, r, 13, 3, 5.5f, 13.5f, 11.5f, 13.5f, 10.5f, 21, 18.5f, 10, 12.5f, 10, 13, 3);
         }
 
+        /// <summary>Opens-in-browser arrow.</summary>
+        public static void Link(Graphics g, RectangleF r, Color c)
+        {
+            using (var p = MakePen(r, c))
+            {
+                Poly(g, p, r, 14, 4, 20, 4, 20, 10);
+                Line(g, p, r, 20, 4, 11.5f, 12.5f);
+                Poly(g, p, r, 10.5f, 6, 6, 6, 6, 18, 18, 18, 18, 13.5f);
+            }
+        }
+
         public static void Folder(Graphics g, RectangleF r, Color c)
         {
             using (var p = MakePen(r, c)) Poly(g, p, r, 3.5f, 18.5f, 3.5f, 5.5f, 9.5f, 5.5f, 11.5f, 8, 20.5f, 8, 20.5f, 18.5f, 3.5f, 18.5f);

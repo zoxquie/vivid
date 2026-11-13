@@ -28,6 +28,7 @@ public static class VividTests
         HoloTests();
         EditingStageTests();
         UpdateTests();
+        BrandTests();
         Console.WriteLine($"{passes} passed, {fails} failed");
         return fails == 0 ? 0 : 1;
     }
@@ -392,5 +393,35 @@ public static class VividTests
         s.Sanitize();
         Check(s.SelectedProfileId == "custom" && s.ProfileKeys.Count == 0, "removed preset falls back to Custom");
         Check(!Presets.All.Exists(p => p.Name == "Vibrant"), "Vibrant preset removed");
+    }
+
+    static void BrandTests()
+    {
+        Check(AppInfo.Name == "Fjord Vision", "app is called Fjord Vision");
+        Check(AppInfo.Site == "https://fjord.wtf", "links to fjord.wtf");
+        var mark = Theme.Mark;
+        Check(mark != null && mark.Width >= 128 && mark.Width == mark.Height, "fjord badge is built in");
+        if (mark != null)
+        {
+            Check(mark.GetPixel(0, 0).A == 0, "badge has rounded (transparent) corners");
+            var mid = mark.GetPixel(mark.Width / 2, mark.Height / 2);
+            Check(mid.A == 255, "badge is solid in the middle");
+        }
+        var tray = Program.TrayIcon;
+        Check(tray != null && tray.Width == SystemInformation.SmallIconSize.Width, "tray icon comes from the icon's own small art");
+        Check(Program.AppIcon != null, "window icon loads");
+        using (var bmp = new Bitmap(64, 64))
+        {
+            using (var g = Graphics.FromImage(bmp)) { g.Clear(Theme.Bg); Theme.DrawLogo(g, new RectangleF(16, 16, 32, 32)); }
+            var c = bmp.GetPixel(32, 34);
+            Check(c != Theme.Bg, "logo draws");
+        }
+        // the updater still looks for the pre-rebrand names, so 1.3/1.4 copies can update to this
+        string updater = File.ReadAllText("src/Updater.cs");
+        Check(updater.Contains("\"Vivid.exe\"") && updater.Contains("name.Name, \"Vivid\""), "updater keeps the Vivid.exe asset and assembly name");
+        string build = File.ReadAllText("build.sh");
+        Check(build.Contains("-out:bin/Vivid.exe"), "build still produces Vivid.exe");
+        string ci = File.ReadAllText(".github/workflows/release.yml");
+        Check(ci.Contains("bin/Vivid.exe") && ci.Contains("Fjord-Vision.exe"), "release ships Vivid.exe for updates and Fjord-Vision.exe for new downloads");
     }
 }

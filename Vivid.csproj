@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!--
-    Build on Windows:  dotnet build -c Release      (output: bin\Release\net48\Vivid.exe)
+    Fjord Vision. Build on Windows:  dotnet build -c Release      (output: bin\Release\net48\Vivid.exe)
+    The assembly stays "Vivid" so copies installed before the rebrand keep auto-updating.
     Targets .NET Framework 4.8, which ships with Windows 10 and 11, so the exe needs no installer.
   -->
   <PropertyGroup>
@@ -11,7 +12,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>Vivid</AssemblyName>
     <RootNamespace>Vivid</RootNamespace>
-    <ApplicationIcon>assets\vivid.ico</ApplicationIcon>
+    <ApplicationIcon>assets\fjord-vision.ico</ApplicationIcon>
     <ApplicationManifest>src\app.manifest</ApplicationManifest>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
@@ -38,5 +39,7 @@
     <EmbeddedResource Include="assets\presets\*.jpg;assets\presets\*.jpeg;assets\presets\*.png;assets\presets\*.bmp">
       <LogicalName>preset.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
+    <EmbeddedResource Include="assets\brand\window.ico" LogicalName="brand.icon.ico" />
+    <EmbeddedResource Include="assets\brand\mark.png" LogicalName="brand.mark.png" />
   </ItemGroup>
 </Project>
