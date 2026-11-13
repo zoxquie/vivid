@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.Linq;
 using System.Windows.Forms;
 
@@ -519,7 +520,7 @@ namespace Vivid
             Theme.Card(g, r, 18);
             Theme.Txt(g, "Hotkeys", Theme.F(15, semibold: true), Theme.Text, new RectangleF(r.X + 20 * S, r.Y + 14 * S, r.Width - 100 * S, 28 * S));
             var s = Ctl.Settings;
-            var rows = new[] { ("Filters on / off", s.ToggleFiltersKey), ("Next profile", s.NextProfileKey), ("Crosshair", s.ToggleCrosshairKey) };
+            var rows = new[] { ("Filters on / off", s.ToggleFiltersKey), ("Next profile", s.NextProfileKey), ("Black holo", s.ToggleHoloKey) };
             float y = r.Y + 54 * S;
             var kf = Theme.F(12, semibold: true);
             foreach (var (label, key) in rows)
@@ -547,105 +548,221 @@ namespace Vivid
         }
     }
 
-    // ================================================================== crosshair page
+    // ================================================================== black holo page
 
-    public sealed class CrosshairPage : Page
+    /// <summary>Before/after demo of the holo recolor on a picture, using the exact same matcher as the overlay.</summary>
+    public sealed class HoloPreview : Widget
     {
-        Panel preview, bar;
-        Segmented zoom;
-        ScrollPanel right;
-        Section secQuick, secShape, secSize, secPlace;
-        Toggle showToggle;
-        Label showLabel;
-        Button reset, bindKey;
-        int zoomIndex = 1;
-        static CrosshairSettings C => Ctl.Settings.Crosshair;
+        public float Split = 0.5f;
+        bool dragging;
+        Bitmap before, after;
+        string key;
+        readonly HoloMatcher matcher = new HoloMatcher();
+        static AppController Ctl => Ui.Form.Ctl;
 
-        static readonly Color[] Palette =
+        public override bool Interactive => true;
+        public override Cursor Cursor => Cursors.SizeWE;
+        public override string Tooltip => dragging ? null : "Before: the holo as Rust draws it. After: what Vivid turns it into. Drag to compare.";
+        public override void MouseDown(PointF p, MouseButtons b) { if (b == MouseButtons.Left) { dragging = true; Move(p); } }
+        public override void MouseDrag(PointF p) { if (dragging) Move(p); }
+        public override void MouseUp(PointF p, bool inside, MouseButtons b) { dragging = false; }
+        public override void DoubleClick(PointF p) { Split = 0.5f; Ui.Invalidate(); }
+        void Move(PointF p) { var r = ImageRect; Split = Math.Max(0.02f, Math.Min(0.98f, (p.X - r.X) / r.Width)); Ui.Invalidate(); }
+
+        RectangleF ImageRect => RectangleF.Inflate(Bounds, -12 * S, -12 * S);
+
+        unsafe void Build(int w, int h)
         {
-            Theme.Hex("#00FF6A"), Theme.Hex("#00E5FF"), Theme.Hex("#FFE600"), Theme.Hex("#FF3DF5"), Theme.Hex("#FF3B3B"), Theme.Hex("#FFFFFF"), Theme.Hex("#000000"),
-        };
+            var hs = Ctl.Settings.Holo;
+            var picture = Scene.PreviewPicture(Ctl.Find("builtin.summer"));
+            string k = w + "x" + h + "|" + hs.Target + "|" + hs.Output + "|" + hs.Tolerance + "|" + System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(picture);
+            if (k == key && before != null) return;
+            key = k;
+            before?.Dispose(); after?.Dispose();
+            before = new Bitmap(w, h, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(before))
+            {
+                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                Scene.DrawCover(g, picture, new RectangleF(0, 0, w, h), 0.5f);
+                using (var dim = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillRectangle(dim, 0, 0, w, h);
+                // a holosight seen from behind: dark frame, tinted glass, glowing ring and dot
+                float cx = w / 2f, cy = h / 2f, R = Math.Min(w, h) * 0.11f;
+                var glass = new RectangleF(cx - R * 2.6f, cy - R * 2.0f, R * 5.2f, R * 4.0f);
+                using (var frame = new Pen(Color.FromArgb(235, 28, 30, 32), R * 0.45f)) using (var path = Theme.Round(glass, R * 0.5f)) g.DrawPath(frame, path);
+                using (var tint = new SolidBrush(Color.FromArgb(40, 120, 200, 200))) using (var path = Theme.Round(glass, R * 0.5f)) g.FillPath(tint, path);
+                var col = Color.FromArgb(hs.Target);
+                for (int i = 4; i >= 1; i--)
+                    using (var glow = new Pen(Color.FromArgb(28, col), R * 0.08f + i * R * 0.07f)) g.DrawEllipse(glow, cx - R, cy - R, 2 * R, 2 * R);
+                using (var ring = new Pen(col, Math.Max(2f, R * 0.09f))) g.DrawEllipse(ring, cx - R, cy - R, 2 * R, 2 * R);
+                float d = Math.Max(3f, R * 0.16f);
+                using (var b = new SolidBrush(col)) g.FillEllipse(b, cx - d / 2, cy - d / 2, d, d);
+            }
 
-        static bool Arms => C.Style == CrossStyle.Cross || C.Style == CrossStyle.CrossDot || C.Style == CrossStyle.TShape;
-        static bool Dot => C.Style == CrossStyle.Dot || C.Style == CrossStyle.CrossDot || C.Style == CrossStyle.CircleDot;
-        static bool Ring => C.Style == CrossStyle.Circle || C.Style == CrossStyle.CircleDot;
+            // run the real matcher over it, then lay its output on top
+            after = (Bitmap)before.Clone();
+            var rect = new Rectangle(0, 0, w, h);
+            var src = before.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var dst = after.LockBits(rect, ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
+            var overlay = new byte[w * h * 4];
+            try
+            {
+                matcher.Resize(w, h);
+                matcher.Configure(hs);
+                fixed (byte* op = overlay) matcher.Process((byte*)src.Scan0, op, Color.FromArgb(hs.Output));
+                byte* dp = (byte*)dst.Scan0;
+                for (int i = 0; i < w * h; i++)
+                {
+                    int a = overlay[i * 4 + 3];
+                    if (a == 0) continue;
+                    for (int c = 0; c < 3; c++) dp[i * 4 + c] = (byte)(overlay[i * 4 + c] + dp[i * 4 + c] * (255 - a) / 255);
+                }
+            }
+            finally { before.UnlockBits(src); after.UnlockBits(dst); }
+        }
+
+        protected override void PaintSelf(Graphics g)
+        {
+            var r = Bounds;
+            Theme.Card(g, r, 20);
+            var img = ImageRect;
+            int ix = (int)Math.Round(img.X), iy = (int)Math.Round(img.Y), iw = (int)Math.Round(img.Width), ih = (int)Math.Round(img.Height);
+            if (iw < 10 || ih < 10) return;
+            Build(iw, ih);
+            using (var clip = Theme.Round(new RectangleF(ix, iy, iw, ih), 14 * S))
+            {
+                var st = g.Save();
+                g.SetClip(clip, CombineMode.Intersect);
+                int cut = Math.Max(0, Math.Min(iw, (int)Math.Round(iw * Split)));
+                var im = g.InterpolationMode; var pm = g.PixelOffsetMode;
+                g.InterpolationMode = InterpolationMode.NearestNeighbor; g.PixelOffsetMode = PixelOffsetMode.Half;
+                if (cut > 0) g.DrawImage(before, new Rectangle(ix, iy, cut, ih), 0, 0, cut, ih, GraphicsUnit.Pixel);
+                if (cut < iw) g.DrawImage(after, new Rectangle(ix + cut, iy, iw - cut, ih), cut, 0, iw - cut, ih, GraphicsUnit.Pixel);
+                g.InterpolationMode = im; g.PixelOffsetMode = pm;
+                float sx = ix + cut;
+                using (var p = new Pen(Color.White, Math.Max(2, 2 * S))) g.DrawLine(p, sx, iy, sx, iy + ih);
+                g.Restore(st);
+                Theme.StrokeRound(g, new RectangleF(ix, iy, iw, ih), 14 * S, Theme.White(30), Math.Max(1, S));
+                Badge(g, "BEFORE", new PointF(ix + 10 * S, iy + ih - 10 * S), true, Split > 0.2f, Color.Empty);
+                Badge(g, "AFTER", new PointF(ix + iw - 10 * S, iy + ih - 10 * S), false, Split < 0.8f, Theme.Accent);
+                var knob = new RectangleF(sx - 15 * S, iy + ih / 2f - 15 * S, 30 * S, 30 * S);
+                Theme.FillRound(g, knob, 15 * S, Color.White);
+                Theme.Txt(g, "‹›", Theme.F(12, semibold: true), Theme.Bg, knob, Theme.H.Center);
+            }
+        }
+
+        void Badge(Graphics g, string text, PointF anchor, bool left, bool show, Color accent)
+        {
+            if (!show) return;
+            var f = Theme.F(10.5f, semibold: true);
+            var ts = Theme.Measure(text, f);
+            var r = new RectangleF(left ? anchor.X : anchor.X - ts.Width - 16 * S, anchor.Y - 22 * S, ts.Width + 16 * S, 22 * S);
+            Theme.FillRound(g, r, 11 * S, Theme.Black(150));
+            Theme.StrokeRound(g, r, 11 * S, accent.IsEmpty ? Theme.White(40) : Theme.WithAlpha(accent, 170), Math.Max(1, S));
+            Theme.Txt(g, text, f, accent.IsEmpty ? Theme.White(230) : Theme.Mix(accent, Color.White, 0.55f), r, Theme.H.Center);
+        }
+    }
+
+    public sealed class HoloPage : Page
+    {
+        HoloPreview preview;
+        Panel bar;
+        ScrollPanel right;
+        Section secMain, secColor;
+        Toggle onToggle;
+        Label onLabel;
+        Button reset, bindKey;
+        readonly System.Windows.Forms.Timer statsTimer = new System.Windows.Forms.Timer { Interval = 500 };
+        static HoloSettings H => Ctl.Settings.Holo;
+
+        // colours a Rust holosight can be set to, and what it can turn into
+        static readonly (string name, Color c)[] Reticles =
+        {
+            ("Red (Rust's default)", Theme.Hex("#FF2A22")), ("Green", Theme.Hex("#2BFF4A")), ("Blue", Theme.Hex("#2E8BFF")),
+            ("Yellow", Theme.Hex("#FFE600")), ("Magenta", Theme.Hex("#FF2BD6")), ("Cyan", Theme.Hex("#00E5FF")), ("White", Theme.Hex("#FFFFFF")),
+        };
+        static readonly (string name, Color c)[] Outputs =
+        {
+            ("Black", Theme.Hex("#000000")), ("Dark grey", Theme.Hex("#2A2A2A")), ("White", Theme.Hex("#FFFFFF")),
+            ("Green", Theme.Hex("#00FF6A")), ("Cyan", Theme.Hex("#00E5FF")), ("Yellow", Theme.Hex("#FFE600")),
+        };
 
         public override void Build()
         {
             Children.Clear();
-            preview = Add(new Panel { Painter = PaintPreview });
-            zoom = Add(new Segmented { Options = new[] { "1x", "2x", "4x" }, Get = () => zoomIndex, Set = i => { zoomIndex = i; Ui.Invalidate(); } });
-
+            preview = Add(new HoloPreview());
             right = Add(new ScrollPanel { Relayout = LayoutRight });
 
-            secQuick = right.Add(new Section("Quick setup", "Rust", Icons.Crosshair, Theme.Accent, null));
-            secQuick.AddRow(new ControlRow("Black holo",
-                () => "Covers the AK holosight's red reticle with a black ring and dot while you hold right-click. If it doesn't line up, change Ring radius below.",
-                new Button { Text = "Use", Style = BtnStyle.Primary, Hint = "Set up the black holo crosshair", OnClick = () => Ctl.SetupBlackHolo() }, 84, 36));
-            secQuick.AddRow(new ControlRow("Only while aiming",
-                () => "Show the crosshair only while the right mouse button is held.",
-                new Toggle { Get = () => C.AimOnly, Set = v => { C.AimOnly = v; Ctl.CrosshairChanged(); } }, 44, 26));
-
-            secShape = right.Add(new Section("Shape", "Style", Icons.Crosshair, Theme.Green, null));
-            secShape.AddRow(new WideRow("Shape", new Segmented
+            secMain = right.Add(new Section("Rust", "Black holo", Icons.Crosshair, Theme.Accent, null));
+            secMain.AddRow(new ControlRow("Black holo",
+                () => "Turns the holosight's reticle black on your screen, both in hip fire and when aiming. Rust has to run in borderless or windowed mode.",
+                new Toggle { Get = () => H.Enabled, Set = v => Ctl.SetHoloEnabled(v) }, 44, 26));
+            secMain.AddRow(new ControlRow("Only while Rust is in front",
+                () => "Pauses whenever another window is in front, so nothing else on your screen changes.",
+                new Toggle { Get = () => H.OnlyInRust, Set = v => { H.OnlyInRust = v; Ctl.HoloChanged(); } }, 44, 26));
+            secMain.AddRow(new WideRow("Area", new Segmented
             {
-                Options = new[] { "Cross", "Cross •", "Dot", "Ring", "Ring •", "T" },
-                Get = () => (int)C.Style,
-                Set = i => { C.Style = (CrossStyle)i; Ctl.CrosshairChanged(); }
-            }, 470));
-            var sw = new SwatchRow();
-            foreach (var col in Palette)
-            {
-                var cc = col;
-                sw.Add(new Swatch { Color = cc, SelectedWhen = () => (C.Color & 0xFFFFFF) == (cc.ToArgb() & 0xFFFFFF), OnClick = () => { C.Color = cc.ToArgb(); Ctl.CrosshairChanged(); } });
-            }
-            var custom = sw.Add(new Swatch { IsCustom = true });
-            custom.Color = Color.FromArgb(C.Color);
-            custom.SelectedWhen = () => Palette.All(p => (p.ToArgb() & 0xFFFFFF) != (C.Color & 0xFFFFFF));
-            custom.OnClick = () =>
-            {
-                using (var dlg = new ColorDialog { Color = Color.FromArgb(C.Color), FullOpen = true })
-                    if (dlg.ShowDialog(Ui.Form) == DialogResult.OK) { C.Color = dlg.Color.ToArgb(); custom.Color = dlg.Color; Ctl.CrosshairChanged(); }
-            };
-            secShape.AddRow(new WideRow("Color", sw));
-            secShape.AddRow(IntRow("Opacity", 10, 100, 100, () => (int)Math.Round(C.Opacity * 100), v => C.Opacity = v / 100.0, v => v + "%"));
-
-            secSize = right.Add(new Section("Size", "Dimensions", Icons.Sliders, Theme.Blue, null));
-            secSize.AddRow(IntRow("Length", 1, 60, 7, () => C.Length, v => C.Length = v, Px, () => Arms));
-            secSize.AddRow(IntRow("Thickness", 1, 12, 2, () => C.Thickness, v => C.Thickness = v, Px));
-            secSize.AddRow(IntRow("Gap", 0, 40, 4, () => C.Gap, v => C.Gap = v, Px, () => Arms));
-            secSize.AddRow(IntRow("Dot size", 1, 16, 3, () => C.DotSize, v => C.DotSize = v, Px, () => Dot));
-            secSize.AddRow(IntRow("Ring radius", 2, 60, 10, () => C.CircleRadius, v => C.CircleRadius = v, Px, () => Ring));
-
-            secPlace = right.Add(new Section("Placement", "Outline and position", Icons.Monitor, Theme.Amber, null));
-            secPlace.AddRow(IntRow("Outline", 0, 4, 1, () => C.Outline, v => C.Outline = v, Px));
-            secPlace.AddRow(IntRow("Offset X", -400, 400, 0, () => C.OffsetX, v => C.OffsetX = v, SignedPx));
-            secPlace.AddRow(IntRow("Offset Y", -400, 400, 0, () => C.OffsetY, v => C.OffsetY = v, SignedPx));
+                Options = new[] { "Aiming", "Aim + hip fire", "Large" },
+                Get = () => H.Area,
+                Set = i => { H.Area = i; Ctl.HoloChanged(); }
+            }, 360));
             int n = Math.Max(1, Math.Min(4, Screen.AllScreens.Length));
             var opts = new string[n];
             opts[0] = "Main";
             for (int i = 1; i < n; i++) opts[i] = "Display " + (i + 1);
-            var disp = secPlace.AddRow(new WideRow("Display", new Segmented { Options = opts, Get = () => Math.Min(C.Display, opts.Length - 1), Set = i => { C.Display = i; Ctl.CrosshairChanged(); } }, 120 * n));
+            var disp = secMain.AddRow(new WideRow("Display", new Segmented { Options = opts, Get = () => Math.Min(H.Display, opts.Length - 1), Set = i => { H.Display = i; Ctl.HoloChanged(); } }, 120 * n));
             disp.Visible = n > 1;
-            secPlace.FooterNote = () => "The overlay is click-through and never takes focus. If a game hides it, switch the game to borderless or windowed mode.";
+            secMain.FooterNote = () => "Aim + hip fire watches the middle of the screen where the sight sits. Bright red things in that area (like red tree markers) can turn black too.";
+
+            secColor = right.Add(new Section("Colours", "Reticle colour", Icons.Drop, Theme.Green, null));
+            secColor.AddRow(new WideRow("Reticle in Rust", Swatches(Reticles, () => H.Target, v => H.Target = v)));
+            secColor.AddRow(new WideRow("Turns into", Swatches(Outputs, () => H.Output, v => H.Output = v)));
+            secColor.AddRow(new SliderRow("Tolerance", 0, 100, 45, 1, () => H.Tolerance, v => { H.Tolerance = (int)Math.Round(v); Ctl.HoloChanged(); },
+                v => (int)v + "%", SliderLook.Neutral, Theme.Text));
+            secColor.FooterNote = () => "If you set a different holosight colour in Rust's accessibility settings, pick the same one here. Raise Tolerance if parts of the glow stay coloured, lower it if other things turn black.";
 
             bar = Add(new Panel { Painter = PaintBar });
-            showToggle = Add(new Toggle { Get = () => C.Enabled, Set = v => Ctl.SetCrosshairEnabled(v) });
-            showLabel = Add(new Label { Text = "Show crosshair", Font = Theme.F(14) });
-            reset = Add(new Button { Text = "Reset", Icon = Icons.Reset, IconSize = 15, Style = BtnStyle.Secondary, Hint = "Back to the default crosshair", OnClick = () => Ctl.ResetCrosshair() });
+            onToggle = Add(new Toggle { Get = () => H.Enabled, Set = v => Ctl.SetHoloEnabled(v) });
+            onLabel = Add(new Label { Text = "Black holo", Font = Theme.F(14) });
+            reset = Add(new Button { Text = "Reset", Icon = Icons.Reset, IconSize = 15, Style = BtnStyle.Secondary, Hint = "Back to the default settings", OnClick = () => Ctl.ResetHolo() });
             bindKey = Add(new Button
             {
-                TextFn = () => C != null && !Ctl.Settings.ToggleCrosshairKey.IsEmpty ? Ctl.Settings.ToggleCrosshairKey.ToString() : "Bind key",
-                Icon = Icons.Keyboard, Style = BtnStyle.Secondary, IconSize = 17, Hint = "Key that shows or hides the crosshair",
-                OnClick = () => Ui.Form.BindKeyDialog("Crosshair on / off", () => Ctl.Settings.ToggleCrosshairKey, k => Ctl.SetGlobalKey("crosshair", k))
+                TextFn = () => !Ctl.Settings.ToggleHoloKey.IsEmpty ? Ctl.Settings.ToggleHoloKey.ToString() : "Bind key",
+                Icon = Icons.Keyboard, Style = BtnStyle.Secondary, IconSize = 17, Hint = "Key that turns the black holo on or off",
+                OnClick = () => Ui.Form.BindKeyDialog("Black holo on / off", () => Ctl.Settings.ToggleHoloKey, k => Ctl.SetGlobalKey("holo", k))
             });
+
+            // keep the live numbers in the status bar fresh
+            statsTimer.Tick -= OnStats;
+            statsTimer.Tick += OnStats;
+            statsTimer.Start();
         }
 
-        static string Px(double v) => ((int)v) + " px";
-        static string SignedPx(double v) => (v > 0 ? "+" : "") + (int)v + " px";
+        void OnStats(object s, EventArgs e)
+        {
+            if (Ui.Form == null || Ui.Form.Current != PageId.Holo || !Ui.Form.Visible || !H.Enabled) return;
+            Ui.Form.Invalidate(Rectangle.Ceiling(bar.Bounds));
+        }
 
-        static SliderRow IntRow(string name, int min, int max, int def, Func<int> get, Action<int> set, Func<double, string> fmt, Func<bool> enabled = null) =>
-            new SliderRow(name, min, max, def, 1, () => get(), v => { set((int)Math.Round(v)); Ctl.CrosshairChanged(); }, fmt, SliderLook.Neutral, Theme.Text, enabled);
+        static SwatchRow Swatches((string name, Color c)[] list, Func<int> get, Action<int> set)
+        {
+            var sw = new SwatchRow();
+            foreach (var item in list)
+            {
+                var cc = item.c;
+                sw.Add(new Swatch { Color = cc, Hint = item.name, SelectedWhen = () => (get() & 0xFFFFFF) == (cc.ToArgb() & 0xFFFFFF), OnClick = () => { set(cc.ToArgb()); Ctl.HoloChanged(); } });
+            }
+            var custom = sw.Add(new Swatch { IsCustom = true });
+            custom.Color = Color.FromArgb(get());
+            custom.SelectedWhen = () => list.All(p => (p.c.ToArgb() & 0xFFFFFF) != (get() & 0xFFFFFF));
+            custom.OnClick = () =>
+            {
+                using (var dlg = new ColorDialog { Color = Color.FromArgb(get()), FullOpen = true })
+                    if (dlg.ShowDialog(Ui.Form) == DialogResult.OK) { set(dlg.Color.ToArgb()); custom.Color = dlg.Color; Ctl.HoloChanged(); }
+            };
+            return sw;
+        }
 
         public override void Layout(RectangleF area)
         {
@@ -654,9 +771,8 @@ namespace Vivid
             float top = area.Y + HeaderH * S;
             float barH = 66 * S;
             float barY = area.Bottom - barH;
-            float leftW = Math.Max(300 * S, Math.Min(460 * S, area.Width * 0.38f));
+            float leftW = Math.Max(300 * S, Math.Min(520 * S, area.Width * 0.42f));
             preview.Bounds = new RectangleF(area.X, top, leftW, barY - gap - top);
-            zoom.Bounds = new RectangleF(preview.Bounds.Right - 24 * S - 150 * S, preview.Bounds.Y + 24 * S, 150 * S, 34 * S);
             right.Bounds = new RectangleF(area.X + leftW + gap, top, area.Width - leftW - gap, barY - gap - top);
             LayoutRight();
             bar.Bounds = new RectangleF(area.X, barY, area.Width, barH);
@@ -666,16 +782,16 @@ namespace Vivid
             bindKey.Bounds = new RectangleF(x - kw, cy - bh / 2, kw, bh); x = bindKey.Bounds.X - 10 * S;
             float rw = Theme.Measure("Reset", Theme.F(13.5f, true)).Width + 52 * S;
             reset.Bounds = new RectangleF(x - rw, cy - bh / 2, rw, bh); x = reset.Bounds.X - 18 * S;
-            float lw = Theme.Measure("Show crosshair", Theme.F(14)).Width + 4 * S;
-            showLabel.Bounds = new RectangleF(x - 8 * S - lw, bar.Bounds.Y, lw, barH);
-            showToggle.Bounds = new RectangleF(showLabel.Bounds.X - 10 * S - 42 * S, cy - 12 * S, 42 * S, 24 * S);
+            float lw = Theme.Measure("Black holo", Theme.F(14)).Width + 4 * S;
+            onLabel.Bounds = new RectangleF(x - 8 * S - lw, bar.Bounds.Y, lw, barH);
+            onToggle.Bounds = new RectangleF(onLabel.Bounds.X - 10 * S - 42 * S, cy - 12 * S, 42 * S, 24 * S);
         }
 
         void LayoutRight()
         {
             var r = right.Bounds;
             float y = r.Y - right.Offset, gap = 14 * S;
-            var secs = new[] { secQuick, secShape, secSize, secPlace };
+            var secs = new[] { secMain, secColor };
             float total = secs.Sum(x => x.MeasureHeight(r.Width)) + gap * (secs.Length - 1);
             float w = total > r.Height + 1 ? r.Width - 12 * S : r.Width;
             foreach (var s in secs)
@@ -691,59 +807,26 @@ namespace Vivid
         public override void Paint(Graphics g)
         {
             Layout(Area);
-            PaintHeader(g, "Crosshair overlay", "A click-through crosshair drawn on top of your game. Previewed over your current filter.");
+            PaintHeader(g, "Black holo", "Turns the Rust holosight's reticle black on screen, whether you're aiming or not.");
             base.Paint(g);
-        }
-
-        void PaintPreview(Graphics g, RectangleF r)
-        {
-            Theme.Card(g, r, 20);
-            var inner = RectangleF.Inflate(r, -12 * S, -12 * S);
-            using (var path = Theme.Round(inner, 14 * S))
-            {
-                var st = g.Save();
-                g.SetClip(path, CombineMode.Intersect);
-                // the same scene as the filter preview, with your current filter applied
-                var vals = Ctl.Settings.FiltersOn ? Ctl.AppliedValues : new FilterValues();
-                var picture = Scene.PreviewPicture(Ctl.Selected, Ctl.Find("builtin.summer"));
-                var pic = Scene.FilteredAt(picture, vals, (int)Math.Round(inner.Width), (int)Math.Round(inner.Height), 14 * S, 0.42f);
-                RenderCache.Blit(g, pic, (int)Math.Round(inner.X), (int)Math.Round(inner.Y));
-                using (var shade = Theme.Gradient(inner, Theme.Black(0), Theme.Black(120), 90f)) g.FillRectangle(shade, inner);
-
-                int z = zoomIndex == 0 ? 1 : zoomIndex == 1 ? 2 : 4;
-                using (var bmp = CrosshairRenderer.Render(C))
-                {
-                    var im = g.InterpolationMode; var pm = g.PixelOffsetMode;
-                    g.InterpolationMode = InterpolationMode.NearestNeighbor;
-                    g.PixelOffsetMode = PixelOffsetMode.Half;
-                    int e = (bmp.Width - 1) / 2;
-                    float cx = (float)Math.Round(inner.X + inner.Width / 2), cy = (float)Math.Round(inner.Y + inner.Height / 2);
-                    if (C.Enabled) Theme.RadialGlow(g, new PointF(cx, cy), (e + 8) * z, (e + 8) * z, Color.FromArgb(C.Color), 40);
-                    g.DrawImage(bmp, new RectangleF(cx - (e + 0.5f) * z, cy - (e + 0.5f) * z, bmp.Width * z, bmp.Height * z));
-                    g.InterpolationMode = im; g.PixelOffsetMode = pm;
-                }
-                g.Restore(st);
-                Theme.StrokeRound(g, inner, 14 * S, Theme.White(30), Math.Max(1, S));
-            }
-            string text = "Actual pixel size" + (zoomIndex == 0 ? "" : zoomIndex == 1 ? "  ·  zoomed 2x" : "  ·  zoomed 4x");
-            var f = Theme.F(11.5f, semibold: true);
-            var ts = Theme.Measure(text, f);
-            var chip = new RectangleF(inner.X + 12 * S, inner.Bottom - 12 * S - 26 * S, ts.Width + 22 * S, 26 * S);
-            Theme.FillRound(g, chip, 13 * S, Theme.Black(150));
-            Theme.StrokeRound(g, chip, 13 * S, Theme.White(40), Math.Max(1, S));
-            Theme.Txt(g, text, f, Theme.White(230), chip, Theme.H.Center);
         }
 
         void PaintBar(Graphics g, RectangleF r)
         {
             Theme.Card(g, r, 18);
             float x = r.X + 22 * S;
-            Theme.Txt(g, "CROSSHAIR", Theme.F(10.5f, semibold: true), Theme.TextDim, new RectangleF(x, r.Y + 12 * S, 200 * S, 16 * S));
-            Theme.PulseDot(g, new PointF(x + 4 * S, r.Y + 41 * S), 8 * S, C.Enabled ? Theme.Green : Theme.TextDim, C.Enabled);
-            string where = C.Display == 0 || Screen.AllScreens.Length < 2 ? "your main display" : "display " + (C.Display + 1);
-            string status = !C.Enabled ? "Hidden" : C.AimOnly ? "Showing while you aim, on " + where : "Showing on " + where;
-            Theme.Txt(g, status, Theme.F(14, semibold: true), Theme.Text, new RectangleF(x + 22 * S, r.Y + 29 * S, Math.Max(20, showToggle.Bounds.X - x - 46 * S), 24 * S));
-            float sx = showLabel.Bounds.Right + 9 * S;
+            Theme.Txt(g, "STATUS", Theme.F(10.5f, semibold: true), Theme.TextDim, new RectangleF(x, r.Y + 12 * S, 200 * S, 16 * S));
+            var o = Ctl.Holo;
+            var st = o?.State ?? HoloOverlay.RunState.Off;
+            string text; Color c; bool pulse = false;
+            if (!H.Enabled) { text = "Off"; c = Theme.TextDim; }
+            else if (st == HoloOverlay.RunState.Unsupported) { text = Native.IsWindows ? "Stopped: something went wrong (see error.log)" : "Only works on Windows"; c = Theme.Red; }
+            else if (st == HoloOverlay.RunState.WaitingForRust) { text = "On · waiting for Rust to be in front"; c = Theme.Amber; }
+            else if (st == HoloOverlay.RunState.Running) { text = "Working · " + o.Fps + " fps · " + o.FrameMs.ToString("0.0") + " ms per frame · " + o.Changed + " px recolored"; c = Theme.Green; pulse = true; }
+            else { text = "Starting…"; c = Theme.Amber; }
+            Theme.PulseDot(g, new PointF(x + 4 * S, r.Y + 41 * S), 8 * S, c, pulse);
+            Theme.Txt(g, text, Theme.F(14, semibold: true), Theme.Text, new RectangleF(x + 22 * S, r.Y + 29 * S, Math.Max(20, onToggle.Bounds.X - x - 46 * S), 24 * S));
+            float sx = onLabel.Bounds.Right + 9 * S;
             using (var p = new Pen(Theme.White(22), Math.Max(1, S))) g.DrawLine(p, sx, r.Y + 18 * S, sx, r.Bottom - 18 * S);
         }
     }
@@ -781,7 +864,7 @@ namespace Vivid
             var keys = new Section("Keyboard", "Hotkeys", Icons.Keyboard, Theme.Blue);
             keys.AddRow(KeyRow("Filters on / off", "Turns every filter off and back on.", () => s.ToggleFiltersKey, "filters"));
             keys.AddRow(KeyRow("Next profile", "Cycles through Custom, the built-in presets and your profiles.", () => s.NextProfileKey, "next"));
-            keys.AddRow(KeyRow("Crosshair on / off", "Shows or hides the crosshair overlay.", () => s.ToggleCrosshairKey, "crosshair"));
+            keys.AddRow(KeyRow("Black holo on / off", "Turns the Rust black holo on or off.", () => s.ToggleHoloKey, "holo"));
             keys.AddRow(KeyRow("Show / hide Vivid", "Brings this window up from the tray.", () => s.ShowWindowKey, "window"));
             keys.FooterNote = () => "Hotkeys work while you play. A key bound here is reserved for Vivid, so pick keys your game doesn't use. Each profile can also get its own key from its ⋯ menu." +
                 (Ctl.HotkeyFailures.Count > 0 ? "  Already used by another app: " + string.Join(", ", Ctl.HotkeyFailures) + "." : "");

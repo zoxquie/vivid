@@ -7,7 +7,7 @@ using System.Reflection;
 using System.Threading;
 using System.Windows.Forms;
 
-[assembly: AssemblyDescription("Screen color filters, presets, hotkeys and a crosshair overlay")]
+[assembly: AssemblyDescription("Screen color filters, presets, hotkeys and a black holo for Rust")]
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
 
 namespace Vivid
@@ -231,7 +231,7 @@ namespace Vivid
 
         static int lastLogged;
 
-        static void Log(Exception ex)
+        internal static void Log(Exception ex)
         {
             if (ex == null) return;
             try
@@ -264,7 +264,7 @@ namespace Vivid
             s.UserProfiles.Add(new Profile { Name = "Rust day", Values = FilterValues.Make(0.02, 1.12, 1.45, 0, 1.05) });
             s.UserProfiles.Add(new Profile { Name = "Monument night", Values = FilterValues.Make(0.04, 1.05, 1.25, -6, 2.10) });
             s.ProfileKeys.Add(new ProfileKey { ProfileId = "builtin.night", Key = new Hotkey(Keys.F5) });
-            s.Crosshair.Enabled = true;
+            s.Holo.Enabled = true;
             ctl = new AppController(s);
             ctl.Engine.Init(s, null);
 
@@ -304,8 +304,7 @@ namespace Vivid
             s.SelectedProfileId = "builtin.summer";
             Ui.Hover = null;
             Shot("filters-custom", () => { s.SelectedProfileId = s.UserProfiles[1].Id; });
-            Shot("crosshair", () => form.ShowPage(PageId.Crosshair));
-            Shot("crosshair-holo", () => ctl.SetupBlackHolo());
+            Shot("holo", () => form.ShowPage(PageId.Holo));
             var normal = size;
             Shot("settings-tall", () => { size = new Size(normal.Width, (int)(2000 * scale)); form.ClientSize = size; form.ShowPage(PageId.Settings); });
             size = normal; form.ClientSize = size;
@@ -327,7 +326,7 @@ namespace Vivid
                 form.RebuildAll();
                 form.ShowPage(PageId.Filters);
             });
-            Shot("small-crosshair", () => form.ShowPage(PageId.Crosshair));
+            Shot("small-holo", () => form.ShowPage(PageId.Holo));
             Shot("small-editing", () => { form.ShowPage(PageId.Filters); ctl.Select(ctl.Find("builtin.night")); ctl.SetValue(FilterParam.NightVision, 2.2); });
             ctl.Discard();
             return 0;

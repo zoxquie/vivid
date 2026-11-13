@@ -206,45 +206,32 @@ namespace Vivid
         public Hotkey Key { get; set; }
     }
 
-    public enum CrossStyle { Cross = 0, CrossDot = 1, Dot = 2, Circle = 3, CircleDot = 4, TShape = 5 }
-
-    public class CrosshairSettings
+    /// <summary>Recolors the Rust holosight reticle on screen (see HoloOverlay).</summary>
+    public class HoloSettings
     {
         public bool Enabled { get; set; } = false;
-        public CrossStyle Style { get; set; } = CrossStyle.Cross;
-        public int Color { get; set; } = unchecked((int)0xFF00FF6A);
-        public int Length { get; set; } = 7;
-        public int Thickness { get; set; } = 2;
-        public int Gap { get; set; } = 4;
-        public int DotSize { get; set; } = 3;
-        public int CircleRadius { get; set; } = 10;
-        public int Outline { get; set; } = 1;
-        public double Opacity { get; set; } = 1.0;
-        public int OffsetX { get; set; } = 0;
-        public int OffsetY { get; set; } = 0;
+        /// <summary>The reticle's colour in Rust. Pixels close to it get recolored.</summary>
+        public int Target { get; set; } = unchecked((int)0xFFFF2A22);
+        /// <summary>What the reticle turns into.</summary>
+        public int Output { get; set; } = unchecked((int)0xFF000000);
+        /// <summary>0–100: how far from the target colour still counts as the reticle.</summary>
+        public int Tolerance { get; set; } = 45;
+        /// <summary>0 = middle only (aiming), 1 = aiming and hip fire, 2 = most of the screen.</summary>
+        public int Area { get; set; } = 1;
+        /// <summary>Only work while Rust is the window in front.</summary>
+        public bool OnlyInRust { get; set; } = true;
         public int Display { get; set; } = 0; // index into Screen.AllScreens, 0 = primary
-        /// <summary>Only show the crosshair while the right mouse button is held (aiming down sights).</summary>
-        public bool AimOnly { get; set; } = false;
 
-        public CrosshairSettings Clone() => (CrosshairSettings)MemberwiseClone();
+        public HoloSettings Clone() => (HoloSettings)MemberwiseClone();
 
         public void Sanitize()
         {
-            Length = Clamp(Length, 1, 60);
-            Thickness = Clamp(Thickness, 1, 12);
-            Gap = Clamp(Gap, 0, 40);
-            DotSize = Clamp(DotSize, 1, 16);
-            CircleRadius = Clamp(CircleRadius, 2, 60);
-            Outline = Clamp(Outline, 0, 4);
-            OffsetX = Clamp(OffsetX, -400, 400);
-            OffsetY = Clamp(OffsetY, -400, 400);
-            if (double.IsNaN(Opacity)) Opacity = 1;
-            Opacity = Math.Max(0.1, Math.Min(1, Opacity));
+            Tolerance = Math.Max(0, Math.Min(100, Tolerance));
+            Area = Math.Max(0, Math.Min(2, Area));
             if (Display < 0) Display = 0;
-            if (!Enum.IsDefined(typeof(CrossStyle), Style)) Style = CrossStyle.Cross;
+            Target |= unchecked((int)0xFF000000);
+            Output |= unchecked((int)0xFF000000);
         }
-
-        static int Clamp(int v, int a, int b) => Math.Max(a, Math.Min(b, v));
     }
 
     public enum EngineMode { ScreenMatrix = 0, GammaRamp = 1 }
@@ -273,7 +260,7 @@ namespace Vivid
 
         public Hotkey ToggleFiltersKey { get; set; } = new Hotkey(Keys.F8);
         public Hotkey NextProfileKey { get; set; } = new Hotkey(Keys.F9);
-        public Hotkey ToggleCrosshairKey { get; set; } = new Hotkey(Keys.F8, Native.MOD_CONTROL);
+        public Hotkey ToggleHoloKey { get; set; } = new Hotkey(Keys.F8, Native.MOD_CONTROL);
         public Hotkey ShowWindowKey { get; set; } = new Hotkey();
 
         public bool StartWithWindows { get; set; } = false;
@@ -282,7 +269,7 @@ namespace Vivid
         public bool ShowOsd { get; set; } = true;
         public bool TrayHintShown { get; set; } = false;
 
-        public CrosshairSettings Crosshair { get; set; } = new CrosshairSettings();
+        public HoloSettings Holo { get; set; } = new HoloSettings();
         public RecoveryState Recovery { get; set; } = new RecoveryState();
 
         public void Sanitize()
@@ -302,10 +289,10 @@ namespace Vivid
             ProfileKeys.RemoveAll(k => k == null || k.Key == null || k.Key.IsEmpty || string.IsNullOrEmpty(k.ProfileId));
             if (ToggleFiltersKey == null) ToggleFiltersKey = new Hotkey();
             if (NextProfileKey == null) NextProfileKey = new Hotkey();
-            if (ToggleCrosshairKey == null) ToggleCrosshairKey = new Hotkey();
+            if (ToggleHoloKey == null) ToggleHoloKey = new Hotkey();
             if (ShowWindowKey == null) ShowWindowKey = new Hotkey();
-            if (Crosshair == null) Crosshair = new CrosshairSettings();
-            Crosshair.Sanitize();
+            if (Holo == null) Holo = new HoloSettings();
+            Holo.Sanitize();
             if (Recovery == null) Recovery = new RecoveryState();
             if (!Enum.IsDefined(typeof(EngineMode), Engine)) Engine = EngineMode.ScreenMatrix;
             if (string.IsNullOrEmpty(SelectedProfileId)) SelectedProfileId = "custom";

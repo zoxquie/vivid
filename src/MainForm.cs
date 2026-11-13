@@ -8,7 +8,7 @@ using System.Windows.Forms;
 
 namespace Vivid
 {
-    public enum PageId { Filters, Crosshair, Settings }
+    public enum PageId { Filters, Holo, Settings }
 
     /// <summary>Borderless, fully custom-drawn main window.</summary>
     public sealed class MainForm : Form
@@ -69,7 +69,7 @@ namespace Vivid
 
             topBar = new TopBar();
             pages[PageId.Filters] = new FiltersPage();
-            pages[PageId.Crosshair] = new CrosshairPage();
+            pages[PageId.Holo] = new HoloPage();
             pages[PageId.Settings] = new SettingsPage();
             foreach (var p in pages.Values) p.Build();
             topBar.Build();
@@ -801,7 +801,7 @@ namespace Vivid
                 open.Font = new Font(m.Font, FontStyle.Bold);
                 m.Items.Add(new ToolStripSeparator());
                 var f = new ToolStripMenuItem("Filters on", null, (a, b) => Ctl.SetFiltersOn(!Ctl.Settings.FiltersOn)) { Checked = Ctl.Settings.FiltersOn };
-                var c = new ToolStripMenuItem("Crosshair", null, (a, b) => Ctl.SetCrosshairEnabled(!Ctl.Settings.Crosshair.Enabled)) { Checked = Ctl.Settings.Crosshair.Enabled };
+                var c = new ToolStripMenuItem("Black holo", null, (a, b) => Ctl.SetHoloEnabled(!Ctl.Settings.Holo.Enabled)) { Checked = Ctl.Settings.Holo.Enabled };
                 m.Items.Add(f);
                 m.Items.Add(c);
                 var prof = new ToolStripMenuItem("Profile");

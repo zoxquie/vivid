@@ -14,7 +14,7 @@ namespace Vivid
         public AppSettings Settings { get; }
         public ColorEngine Engine { get; } = new ColorEngine();
         public HotkeyManager Hotkeys { get; private set; }
-        public CrosshairOverlay Crosshair { get; private set; }
+        public HoloOverlay Holo { get; private set; }
         public OsdToast Osd { get; private set; }
 
         public event Action Changed;          // values / status changed -> repaint
@@ -56,11 +56,11 @@ namespace Vivid
             ui = System.Threading.SynchronizationContext.Current;
             Engine.Init(Settings, SaveNow); // recovery flags must hit the disk before the display changes
             Hotkeys = new HotkeyManager();
-            Crosshair = new CrosshairOverlay();
+            Holo = new HoloOverlay();
             Osd = new OsdToast();
             RegisterHotkeys();
             ApplyNow();
-            Crosshair.Update(Settings.Crosshair);
+            Holo.Update(Settings.Holo);
             watchdogTimer.Start();
             SystemEvents.DisplaySettingsChanged += OnDisplaysChanged;
             SystemEvents.SessionSwitch += OnSessionSwitch;
@@ -77,7 +77,7 @@ namespace Vivid
         {
             if (!OnUiThread(() => OnDisplaysChanged(sender, e))) return;
             Engine.OnDisplaysChanged(AppliedValues, Settings.FiltersOn);
-            Crosshair?.Update(Settings.Crosshair);
+            Holo?.Update(Settings.Holo);
             Changed?.Invoke();
         }
 
@@ -367,7 +367,7 @@ namespace Vivid
             {
                 case "filters": Settings.ToggleFiltersKey = key; break;
                 case "next": Settings.NextProfileKey = key; break;
-                case "crosshair": Settings.ToggleCrosshairKey = key; break;
+                case "holo": Settings.ToggleHoloKey = key; break;
                 case "window": Settings.ShowWindowKey = key; break;
             }
             RegisterHotkeys();
@@ -381,7 +381,7 @@ namespace Vivid
             Settings.ProfileKeys.RemoveAll(k => k.Key.SameAs(key));
             if (Settings.ToggleFiltersKey.SameAs(key)) Settings.ToggleFiltersKey = new Hotkey();
             if (Settings.NextProfileKey.SameAs(key)) Settings.NextProfileKey = new Hotkey();
-            if (Settings.ToggleCrosshairKey.SameAs(key)) Settings.ToggleCrosshairKey = new Hotkey();
+            if (Settings.ToggleHoloKey.SameAs(key)) Settings.ToggleHoloKey = new Hotkey();
             if (Settings.ShowWindowKey.SameAs(key)) Settings.ShowWindowKey = new Hotkey();
         }
 
@@ -394,7 +394,7 @@ namespace Vivid
             if (Hotkeys.Suspended) return;
             Hotkeys.Add(Settings.ToggleFiltersKey, "Toggle filters", () => SetFiltersOn(!Settings.FiltersOn, true));
             Hotkeys.Add(Settings.NextProfileKey, "Next profile", NextProfile);
-            Hotkeys.Add(Settings.ToggleCrosshairKey, "Toggle crosshair", () => SetCrosshairEnabled(!Settings.Crosshair.Enabled, true));
+            Hotkeys.Add(Settings.ToggleHoloKey, "Toggle black holo", () => SetHoloEnabled(!Settings.Holo.Enabled, true));
             Hotkeys.Add(Settings.ShowWindowKey, "Show window", () => ShowWindowRequested?.Invoke());
             foreach (var pk in Settings.ProfileKeys)
             {
@@ -454,49 +454,28 @@ namespace Vivid
             Osd.Show(title, detail, dot);
         }
 
-        // ---------------- crosshair ----------------
+        // ---------------- black holo ----------------
 
-        public void CrosshairChanged()
+        public void HoloChanged()
         {
-            Settings.Crosshair.Sanitize();
-            Crosshair?.Update(Settings.Crosshair);
+            Settings.Holo.Sanitize();
+            Holo?.Update(Settings.Holo);
             SaveSoon();
             Changed?.Invoke();
         }
 
-        public void SetCrosshairEnabled(bool on, bool fromHotkey = false)
+        public void SetHoloEnabled(bool on, bool fromHotkey = false)
         {
-            Settings.Crosshair.Enabled = on;
-            CrosshairChanged();
-            if (fromHotkey) ShowOsd(on ? "Crosshair on" : "Crosshair off", "", on ? Theme.Green : Theme.TextMuted);
+            Settings.Holo.Enabled = on;
+            HoloChanged();
+            if (fromHotkey) ShowOsd(on ? "Black holo on" : "Black holo off", "", on ? Theme.Green : Theme.TextMuted);
         }
 
-        /// <summary>Black ring and dot sized for the AK holosight, shown only while aiming.</summary>
-        public void SetupBlackHolo()
+        public void ResetHolo()
         {
-            var c = Settings.Crosshair;
-            var b = CrosshairOverlay.TargetBounds(c);
-            double k = Math.Max(0.75, b.Height / 1080.0); // the reticle grows with resolution
-            c.Style = CrossStyle.CircleDot;
-            c.Color = unchecked((int)0xFF000000);
-            c.CircleRadius = (int)Math.Round(9 * k);
-            c.Thickness = Math.Max(2, (int)Math.Round(2 * k));
-            c.DotSize = Math.Max(2, (int)Math.Round(3 * k));
-            c.Outline = 0;
-            c.Opacity = 1;
-            c.OffsetX = c.OffsetY = 0;
-            c.AimOnly = true;
-            c.Enabled = true;
-            CrosshairChanged();
-            Toast?.Invoke("Black holo on: hold right-click in game");
-        }
-
-        public void ResetCrosshair()
-        {
-            bool en = Settings.Crosshair.Enabled;
-            int disp = Settings.Crosshair.Display;
-            Settings.Crosshair = new CrosshairSettings { Enabled = en, Display = disp };
-            CrosshairChanged();
+            var h = Settings.Holo;
+            Settings.Holo = new HoloSettings { Enabled = h.Enabled, Display = h.Display };
+            HoloChanged();
         }
 
         // ---------------- system ----------------
@@ -551,7 +530,7 @@ namespace Vivid
             SystemEvents.SessionSwitch -= OnSessionSwitch;
             applyTimer.Stop(); watchdogTimer.Stop();
             Hotkeys?.Dispose();
-            Crosshair?.Dispose();
+            Holo?.Dispose();
             Osd?.Dispose();
             Engine.Shutdown();
             SaveNow();

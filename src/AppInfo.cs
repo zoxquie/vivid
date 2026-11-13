@@ -10,7 +10,7 @@ namespace Vivid
     public static class AppInfo
     {
         /// <summary>Release builds set this from the git tag (v1.3.0 → 1.3.0).</summary>
-        public const string Version = "1.3.0";
+        public const string Version = "1.4.0";
         /// <summary>GitHub repository that hosts the releases the app updates from.</summary>
         public const string Repo = "zoxquie/vivid";
     }

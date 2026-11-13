@@ -265,7 +265,7 @@ namespace Vivid
 
     public sealed class TopBar : Widget
     {
-        Button tabFilters, tabCross, settings, power, wMin, wMax, wClose, update;
+        Button tabFilters, tabHolo, settings, power, wMin, wMax, wClose, update;
         Panel tabsBg, pill;
         static AppController Ctl => Ui.Form.Ctl;
 
@@ -277,7 +277,7 @@ namespace Vivid
                 Painter = (g, r) => { Theme.Card(g, r, 14); }
             });
             tabFilters = Add(new Button { Text = "Filters", Icon = Icons.Sliders, Style = BtnStyle.Tab, IconSize = 17, Radius = 9, SelectedWhen = () => Ui.Form.Current == PageId.Filters, OnClick = () => Ui.Form.ShowPage(PageId.Filters) });
-            tabCross = Add(new Button { Text = "Crosshair", Icon = Icons.Crosshair, Style = BtnStyle.Tab, IconSize = 17, Radius = 9, SelectedWhen = () => Ui.Form.Current == PageId.Crosshair, OnClick = () => Ui.Form.ShowPage(PageId.Crosshair) });
+            tabHolo = Add(new Button { Text = "Holo", Icon = Icons.Crosshair, Style = BtnStyle.Tab, IconSize = 17, Radius = 9, SelectedWhen = () => Ui.Form.Current == PageId.Holo, OnClick = () => Ui.Form.ShowPage(PageId.Holo) });
 
             pill = Add(new Panel { Painter = PaintPill });
             settings = Add(new Button { Icon = Icons.Gear, Style = BtnStyle.Subtle, IconSize = 19, Hint = "Settings", SelectedWhen = () => Ui.Form.Current == PageId.Settings, OnClick = () => Ui.Form.ShowPage(PageId.Settings) });
@@ -330,11 +330,11 @@ namespace Vivid
             float x = 24 * S;
             float tabsX = 62 * S + Theme.Measure("Vivid", Theme.F(20, semibold: true)).Width + 26 * S;
             float tw1 = Theme.Measure("Filters", Theme.F(13.5f, true)).Width + 62 * S;
-            float tw2 = Theme.Measure("Crosshair", Theme.F(13.5f, true)).Width + 62 * S;
+            float tw2 = Theme.Measure("Holo", Theme.F(13.5f, true)).Width + 62 * S;
             tabsBg.Bounds = new RectangleF(tabsX, cy - 22 * S, tw1 + tw2 + 10 * S, 44 * S);
             tabFilters.Bounds = new RectangleF(tabsX + 4 * S, cy - 18 * S, tw1, 36 * S);
-            tabCross.Bounds = new RectangleF(tabFilters.Bounds.Right + 2 * S, cy - 18 * S, tw2, 36 * S);
-            tabFilters.Radius = tabCross.Radius = 10;
+            tabHolo.Bounds = new RectangleF(tabFilters.Bounds.Right + 2 * S, cy - 18 * S, tw2, 36 * S);
+            tabFilters.Radius = tabHolo.Radius = 10;
 
             float right = r.Right - 14 * S;
             float bw = 44 * S, bh = 34 * S;

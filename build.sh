@@ -21,7 +21,7 @@ if [ -d assets/presets ]; then
   done
 fi
 
-$CSC -nologo -noconfig -nostdlib -langversion:latest -optimize+ -warn:4 \
+$CSC -nologo -noconfig -nostdlib -unsafe+ -langversion:latest -optimize+ -warn:4 \
   -platform:x64 -target:winexe -out:bin/Vivid.exe \
   -win32icon:assets/vivid.ico -win32manifest:src/app.manifest \
   -r:$REF/mscorlib.dll -r:$REF/System.dll -r:$REF/System.Core.dll \

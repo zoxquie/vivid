@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 REF=${REF:-/usr/lib/mono/4.8-api}
 CSC=${CSC:-"dotnet $( (ls -d /usr/lib/dotnet/sdk/*/Roslyn/bincore/csc.dll /usr/share/dotnet/sdk/*/Roslyn/bincore/csc.dll 2>/dev/null || true) | sort -V | tail -1)"}
 mkdir -p bin
-$CSC -nologo -noconfig -nostdlib -langversion:latest -target:exe -out:bin/VividTests.exe -main:VividTests \
+$CSC -nologo -noconfig -nostdlib -unsafe+ -langversion:latest -target:exe -out:bin/VividTests.exe -main:VividTests \
   -r:$REF/mscorlib.dll -r:$REF/System.dll -r:$REF/System.Core.dll -r:$REF/System.Drawing.dll \
   -r:$REF/System.Windows.Forms.dll -r:$REF/System.Web.Extensions.dll -r:$REF/Facades/System.ValueTuple.dll \
   src/*.cs tests/Tests.cs

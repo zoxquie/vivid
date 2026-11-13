@@ -594,9 +594,10 @@ namespace Vivid
         public bool IsCustom;
         public Func<bool> SelectedWhen;
         public Action OnClick;
+        public string Hint;
         public override bool Interactive => true;
         public override void Click() => OnClick?.Invoke();
-        public override string Tooltip => IsCustom ? "Pick any color" : null;
+        public override string Tooltip => IsCustom ? "Pick any color" : Hint;
 
         protected override void PaintSelf(Graphics g)
         {

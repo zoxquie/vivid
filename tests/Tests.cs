@@ -25,7 +25,7 @@ public static class VividTests
         RampTests();
         FormatTests();
         StorageTests();
-        CrosshairTests();
+        HoloTests();
         EditingStageTests();
         UpdateTests();
         Console.WriteLine($"{passes} passed, {fails} failed");
@@ -135,23 +135,29 @@ public static class VividTests
         s.UserProfiles.Add(new Profile { Name = "Day \"quoted\"", Values = FilterValues.Make(0.05, 1.2, 1.4, -10, 1.3) });
         s.ProfileKeys.Add(new ProfileKey { ProfileId = s.UserProfiles[0].Id, Key = new Hotkey(Keys.F6, Native.MOD_ALT) });
         s.Engine = EngineMode.GammaRamp;
-        s.Crosshair.Style = CrossStyle.CircleDot;
+        s.Holo.Area = 2;
+        s.Holo.Target = unchecked((int)0xFFFF2BD6);
         s.Recovery.NvOriginalLevels = new List<int> { 3, 0 };
-        s.ToggleCrosshairKey = new Hotkey();
+        s.ToggleHoloKey = new Hotkey();
 
         var json = Storage.Pretty(new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(s));
         var back = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<AppSettings>(json);
         back.Sanitize();
         Check(back.UserProfiles.Count == 1 && back.UserProfiles[0].Name == "Day \"quoted\"", "profile name round trip (pretty JSON)");
         Check(Near(back.UserProfiles[0].Values.Hue, -10) && Near(back.UserProfiles[0].Values.NightVision, 1.3), "values round trip");
-        Check(back.Engine == EngineMode.GammaRamp && back.Crosshair.Style == CrossStyle.CircleDot, "enums round trip");
+        Check(back.Engine == EngineMode.GammaRamp && back.Holo.Area == 2 && back.Holo.Target == unchecked((int)0xFFFF2BD6), "enums and holo settings round trip");
         Check(back.ProfileKeys.Count == 1 && back.ProfileKeys[0].Key.Mods == (int)Native.MOD_ALT, "profile keys round trip");
-        Check(back.ToggleCrosshairKey.IsEmpty && !back.ToggleFiltersKey.IsEmpty, "cleared key stays cleared, others keep defaults");
+        Check(back.ToggleHoloKey.IsEmpty && !back.ToggleFiltersKey.IsEmpty, "cleared key stays cleared, others keep defaults");
         Check(back.Recovery.NvOriginalLevels != null && back.Recovery.NvOriginalLevels[0] == 3, "recovery state round trip");
 
         var partial = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<AppSettings>("{\"FiltersOn\":false}");
         partial.Sanitize();
-        Check(!partial.FiltersOn && partial.Crosshair != null && partial.ToggleFiltersKey.Key == (int)Keys.F8, "old/partial settings files get defaults");
+        Check(!partial.FiltersOn && partial.Holo != null && !partial.Holo.Enabled && partial.ToggleFiltersKey.Key == (int)Keys.F8, "old/partial settings files get defaults");
+
+        var old = new System.Web.Script.Serialization.JavaScriptSerializer().Deserialize<AppSettings>(
+            "{\"FiltersOn\":true,\"Crosshair\":{\"Enabled\":true,\"Style\":4,\"AimOnly\":true},\"ToggleCrosshairKey\":{\"Key\":119,\"Mods\":2},\"SelectedProfileId\":\"builtin.winter\"}");
+        old.Sanitize();
+        Check(old.FiltersOn && old.SelectedProfileId == "builtin.winter" && old.Holo != null && !old.Holo.Enabled, "1.3 settings with crosshair fields still load");
 
         var exported = Storage.ExportJson(s.UserProfiles);
         var imported = Storage.ImportJson(exported);
@@ -166,34 +172,118 @@ public static class VividTests
         Check(Storage.ImportJson("").Count == 0, "empty import");
     }
 
-    static void CrosshairTests()
+    /// <summary>Paints a fake scene with a glowing ring and dot in <paramref name="reticle"/>, BGRA top-down.</summary>
+    static byte[] HoloScene(int w, int h, Color reticle, Color world, int ringR, out int cx, out int cy)
     {
-        foreach (CrossStyle st in Enum.GetValues(typeof(CrossStyle)))
-            for (int t = 1; t <= 5; t++)
-                for (int gap = 0; gap <= 6; gap += 3)
-                {
-                    var c = new CrosshairSettings { Style = st, Thickness = t, Gap = gap, Length = 6, DotSize = t + 1, CircleRadius = 8, Outline = 1, Opacity = 1 };
-                    if (st == CrossStyle.Circle || st == CrossStyle.CircleDot) continue; // anti-aliased, checked visually
-                    using (var bmp = CrosshairRenderer.Render(c))
-                    {
-                        int n = bmp.Width, e = (n - 1) / 2;
-                        int lo = e - (t - 1) / 2, mirror = 2 * lo + t - 1;
-                        bool symX = true, any = false, inside = true;
-                        for (int y = 0; y < n; y++)
-                            for (int x = 0; x < n; x++)
-                            {
-                                int a = bmp.GetPixel(x, y).A;
-                                if (a > 0) any = true;
-                                if (a > 0 && (x == 0 || y == 0 || x == n - 1 || y == n - 1)) inside = false;
-                                int mx = mirror - x;
-                                if (st != CrossStyle.Dot || (c.DotSize % 2) == (t % 2))  // a lone dot is centred on its own axis
-                                    if (mx >= 0 && mx < n && (a > 0) != (bmp.GetPixel(mx, y).A > 0)) symX = false;
-                            }
-                        Check(any, $"{st} t={t} draws something");
-                        Check(inside, $"{st} t={t} gap={gap} fits inside its bitmap");
-                        Check(symX, $"{st} t={t} gap={gap} is left/right symmetric");
-                    }
-                }
+        var px = new byte[w * h * 4];
+        cx = w / 2; cy = h / 2;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                int i = (y * w + x) * 4;
+                // background: a green/brown world with some texture
+                int n = ((x * 31 + y * 17) % 23) - 11;
+                Color c = world;
+                double d = Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+                double ring = Math.Abs(d - ringR);
+                if (ring < 1.2 || d < 2.0) c = reticle;                          // the reticle
+                else if (ring < 3.0) c = Mix(world, reticle, 0.55);             // its glow
+                px[i] = (byte)Math.Max(0, Math.Min(255, c.B + n));
+                px[i + 1] = (byte)Math.Max(0, Math.Min(255, c.G + n));
+                px[i + 2] = (byte)Math.Max(0, Math.Min(255, c.R + n));
+                px[i + 3] = 255;
+            }
+        return px;
+    }
+
+    static Color Mix(Color a, Color b, double t) => Color.FromArgb((int)(a.R + (b.R - a.R) * t), (int)(a.G + (b.G - a.G) * t), (int)(a.B + (b.B - a.B) * t));
+
+    static unsafe (int covered, int ringPixels, int stray, int changed) RunHolo(HoloMatcher m, HoloSettings s, byte[] src, byte[] dst, int w, int h, int cx, int cy, int ringR)
+    {
+        fixed (byte* sp = src, dp = dst) m.Process(sp, dp, Color.FromArgb(s.Output));
+        int covered = 0, ringPixels = 0, stray = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                double d = Math.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+                bool isRing = Math.Abs(d - ringR) < 1.2 || d < 2.0;
+                int a = dst[(y * w + x) * 4 + 3];
+                if (isRing) { ringPixels++; if (a == 255) covered++; }
+                else if (a > 0 && Math.Abs(d - ringR) > 5 && d > 6) stray++;
+            }
+        return (covered, ringPixels, stray, m.Changed);
+    }
+
+    static void HoloTests()
+    {
+        int w = 160, h = 120, R = 22;
+        var world = Color.FromArgb(70, 96, 52);
+        var s = new HoloSettings();
+        var m = new HoloMatcher();
+        m.Resize(w, h);
+        m.Configure(s);
+
+        // Rust's red reticle on a green world: every reticle pixel turns black, nothing else changes
+        var src = HoloScene(w, h, Color.FromArgb(255, 42, 34), world, R, out int cx, out int cy);
+        var dst = new byte[w * h * 4];
+        var r = RunHolo(m, s, src, dst, w, h, cx, cy, R);
+        Check(r.covered == r.ringPixels && r.ringPixels > 100, $"red reticle fully covered ({r.covered}/{r.ringPixels})");
+        Check(r.stray == 0, $"nothing away from the reticle is touched (stray {r.stray})");
+        int i0 = ((cy) * w + cx + R) * 4;
+        Check(dst[i0 + 3] == 255 && dst[i0] == 0 && dst[i0 + 1] == 0 && dst[i0 + 2] == 0, "covered pixels are solid black");
+
+        // the next frame without a reticle clears last frame's pixels
+        var empty = HoloScene(w, h, world, world, R, out _, out _);
+        r = RunHolo(m, s, empty, dst, w, h, cx, cy, R);
+        bool clear = true; for (int i = 3; i < dst.Length; i += 4) if (dst[i] != 0) clear = false;
+        Check(clear && r.changed == 0 && !m.Dirty.IsEmpty, "overlay clears when the reticle goes away (and reports what to redraw)");
+
+        // a darker, dimmer red (e.g. at night or through tinted glass) still counts
+        src = HoloScene(w, h, Color.FromArgb(190, 30, 28), Color.FromArgb(25, 30, 40), R, out cx, out cy);
+        r = RunHolo(m, s, src, dst, w, h, cx, cy, R);
+        Check(r.covered >= r.ringPixels * 0.95, $"dim red reticle at night covered ({r.covered}/{r.ringPixels})");
+
+        // other colours aren't touched by the red setting
+        src = HoloScene(w, h, Color.FromArgb(40, 255, 70), world, R, out cx, out cy);
+        r = RunHolo(m, s, src, dst, w, h, cx, cy, R);
+        Check(r.covered == 0 && r.changed == 0, "a green reticle is left alone while looking for red");
+
+        // a magenta reticle when set to magenta, and a custom output colour
+        s.Target = unchecked((int)0xFFFF2BD6); s.Output = unchecked((int)0xFF00FF6A);
+        m.Configure(s);
+        src = HoloScene(w, h, Color.FromArgb(255, 43, 214), world, R, out cx, out cy);
+        r = RunHolo(m, s, src, dst, w, h, cx, cy, R);
+        int i1 = ((cy) * w + cx + R) * 4;
+        Check(r.covered == r.ringPixels && dst[i1 + 1] == 0xFF && dst[i1 + 2] == 0x00, "magenta reticle recolored to the chosen colour");
+
+        // a screen flooded with the target colour isn't a reticle
+        s = new HoloSettings(); m.Configure(s);
+        var flood = HoloScene(w, h, Color.FromArgb(255, 42, 34), Color.FromArgb(250, 40, 30), R, out cx, out cy);
+        r = RunHolo(m, s, flood, dst, w, h, cx, cy, R);
+        Check(r.changed == 0, "a screen full of red is left alone");
+
+        // areas grow from aiming-only to large and stay inside the display
+        var disp = new Rectangle(0, 0, 2560, 1440);
+        var a0 = HoloMatcher.AreaOn(disp, 0); var a1 = HoloMatcher.AreaOn(disp, 1); var a2 = HoloMatcher.AreaOn(disp, 2);
+        var centre = new Point(1280, 720);
+        Check(a0.Contains(centre) && a1.Contains(a0) && a2.Contains(a1) && disp.Contains(a2), "watched areas nest and cover the centre");
+        Check(a1.Bottom > 1100 && a1.Right > 2000, "aim + hip fire area reaches the lower right where the sight sits");
+
+        // the matcher keeps up: a 1440p 'aim + hip fire' area well under a frame
+        var big = HoloScene(a1.Width, a1.Height, Color.FromArgb(255, 42, 34), world, 60, out cx, out cy);
+        var bigOut = new byte[big.Length];
+        var hm = new HoloMatcher(); hm.Resize(a1.Width, a1.Height); hm.Configure(new HoloSettings());
+        RunHolo(hm, new HoloSettings(), big, bigOut, a1.Width, a1.Height, cx, cy, 60);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int k = 0; k < 10; k++) RunHoloQuick(hm, big, bigOut);
+        double ms = sw.Elapsed.TotalMilliseconds / 10;
+        Console.WriteLine($"  holo matcher: {a1.Width}x{a1.Height} in {ms:F2} ms");
+        Check(ms < 12, $"matcher fast enough for every frame ({ms:F1} ms)");
+    }
+
+    static unsafe void RunHoloQuick(HoloMatcher m, byte[] src, byte[] dst)
+    {
+        fixed (byte* sp = src, dp = dst) m.Process(sp, dp, Color.Black);
     }
 
     /// <summary>Edits wait in a draft until Apply; the screen and saved settings only change then.</summary>

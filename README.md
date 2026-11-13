@@ -1,8 +1,8 @@
 # Vivid — screen color filters for games
 
-Vivid changes the colors of your whole screen, the way the old NVIDIA game filters worked: brightness, contrast, saturation, hue and a night-vision shadow lift. It has built-in presets, your own profiles, hotkeys that work in game, and a click-through crosshair overlay.
+Vivid changes the colors of your whole screen, the way the old NVIDIA game filters worked: brightness, contrast, saturation, hue and a night-vision shadow lift. It has built-in presets, your own profiles, hotkeys that work in game, and a black holo for Rust.
 
-Vivid only changes colors at the display level. It never opens, reads or modifies a game's files or memory, and it doesn't inject anything into a game.
+Vivid only changes colors at the display level. It never opens, reads or modifies a game's files or memory, and it doesn't inject anything into a game. The black holo works from what's on your screen, like recording or streaming software does.
 
 ## Running it
 
@@ -21,11 +21,10 @@ Closing the window keeps Vivid running in the tray so your filters stay on. To q
 - **Hotkeys:** These work while the game has focus. The defaults are:
   - `F8`: filters on/off
   - `F9`: next profile
-  - `Ctrl+F8`: crosshair on/off
+  - `Ctrl+F8`: black holo on/off
 
   Each profile can also have its own key. Pressing that key a second time turns filters off, so it's easy to compare with and without filters.
-- **Crosshair overlay:** Choose a cross, dot, ring or T shape. You can set color, opacity, length, thickness, gap, outline and offset, and pick which display it shows on. The shape is drawn pixel-exact and symmetric.
-- **Black holo (Rust):** **Crosshair → Quick setup → Black holo** puts a black ring and dot over the AK holosight while you hold right-click. **Only while aiming** works with any crosshair.
+- **Black holo (Rust):** The **Holo** tab turns the holosight's red reticle black on screen, in hip fire and when aiming. Every frame Vivid looks at the middle of the screen, finds the reticle's pixels and covers them on a click-through overlay that's left out of screen captures. Pick the reticle color you use in Rust, what it turns into (black by default), how big an area to watch, and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode.
 - **Automatic updates:** Vivid checks this repository's releases, downloads the new `Vivid.exe` and swaps it in place. A **Restart to update** button appears when it's ready. Turn it off or check by hand in **Settings → Updates**.
 - **On-screen messages:** A short message appears when a hotkey switches something while you're in game.
 - **Tray, start with Windows, start minimized, single instance.**
@@ -77,7 +76,7 @@ sudo apt install dotnet-sdk-8.0 mono-devel
 ./build.sh
 ```
 
-This writes `bin/Vivid.exe`. `tests/run.sh` runs the logic tests: the color matrix math, gamma ramps, settings and profile files, share codes and crosshair symmetry.
+This writes `bin/Vivid.exe`. `tests/run.sh` runs the logic tests: the color matrix math, gamma ramps, settings and profile files, share codes and the holo reticle detection.
 
 Code layout:
 
@@ -86,7 +85,8 @@ Code layout:
 | `src/ColorMath.cs` | The filter math: the 5×5 matrix and the gamma curves |
 | `src/ColorEngine.cs` | Applies filters through the matrix, gamma ramp or NVIDIA vibrance, and restores them |
 | `src/NvVibrance.cs` | NVIDIA Digital Vibrance through `nvapi64.dll` |
-| `src/Overlays.cs` | The crosshair renderer, the click-through overlay window and the on-screen messages |
+| `src/Holo.cs` | The black holo: finding the reticle's pixels and the overlay that recolors them |
+| `src/Overlays.cs` | The click-through overlay window and the on-screen messages |
 | `src/AppController.cs` | App state, profiles and hotkeys |
 | `src/MainForm.cs`, `src/Pages.cs`, `src/Layout.cs`, `src/Widgets.cs` | The custom-drawn UI |
 
@@ -94,9 +94,9 @@ Code layout:
 
 Releases are built by GitHub Actions, and every copy of Vivid updates itself from the latest one.
 
-1. Raise `Version` in `src/AppInfo.cs` (for example `1.3.0` → `1.3.1`).
+1. Raise `Version` in `src/AppInfo.cs` (for example `1.4.0` → `1.4.1`).
 2. Commit and push to `main`.
 
-The workflow sees a version that hasn't been released yet, builds `Vivid.exe` with `build.sh`, runs the tests and publishes release `v1.3.1` with the exe attached. Pushes that don't change the version don't publish anything.
+The workflow sees a version that hasn't been released yet, builds `Vivid.exe` with `build.sh`, runs the tests and publishes release `v1.4.1` with the exe attached. Pushes that don't change the version don't publish anything.
 
 To build locally on Linux: `apt install dotnet-sdk-8.0 mono-devel`, then `./build.sh` (tests: `tests/run.sh`).
