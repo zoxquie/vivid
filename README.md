@@ -94,10 +94,9 @@ Code layout:
 
 Releases are built by GitHub Actions, and every copy of Vivid updates itself from the latest one.
 
-```bash
-git tag v1.3.1
-git push origin v1.3.1
-```
+1. Raise `Version` in `src/AppInfo.cs` (for example `1.3.0` → `1.3.1`).
+2. Commit and push to `main`.
 
-The workflow sets the version from the tag, builds `Vivid.exe` with `build.sh` and attaches it to a new release. To build locally on Linux: `apt install dotnet-sdk-8.0 mono-devel`, then `./build.sh` (tests: `tests/run.sh`).
+The workflow sees a version that hasn't been released yet, builds `Vivid.exe` with `build.sh`, runs the tests and publishes release `v1.3.1` with the exe attached. Pushes that don't change the version don't publish anything.
 
+To build locally on Linux: `apt install dotnet-sdk-8.0 mono-devel`, then `./build.sh` (tests: `tests/run.sh`).

@@ -1,47 +1,54 @@
 name: Build and release
 
-# Push a tag like v1.3.1 to publish a new version. Every copy of Vivid picks it up automatically.
+# Releasing = raise the version in src/AppInfo.cs and push to main.
+# When main has a version that hasn't been released yet, this builds Vivid.exe and publishes
+# release vX.Y.Z with it. Every copy of Vivid picks the new release up by itself.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read the version
+        id: v
+        run: |
+          v=$(grep -oP 'public const string Version = "\K[0-9]+\.[0-9]+\.[0-9]+' src/AppInfo.cs)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" >/dev/null 2>&1; then
+            echo "Release v$v already exists; nothing to publish."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install .NET Framework reference assemblies (Mono)
+        if: steps.v.outputs.new == 'true'
         run: sudo apt-get update -q && sudo apt-get install -y -q mono-devel xvfb
 
-      - name: Set the version from the tag
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          v="${GITHUB_REF_NAME#v}"
-          sed -i -E "s/(public const string Version = \")[0-9.]+(\";)/\1${v}\2/" src/AppInfo.cs
-          grep -n "public const string Version" src/AppInfo.cs
-
       - name: Build
+        if: steps.v.outputs.new == 'true'
         run: bash build.sh
 
       - name: Test
+        if: steps.v.outputs.new == 'true'
         run: bash tests/run.sh
 
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
-        env:
-          GH_TOKEN: ${{ github.token }}
+        if: steps.v.outputs.new == 'true'
         run: |
-          gh release create "$GITHUB_REF_NAME" bin/Vivid.exe \
-            --title "Vivid ${GITHUB_REF_NAME#v}" \
-            --generate-notes
-
-      - name: Keep the build
-        uses: actions/upload-artifact@v4
-        with:
-          name: Vivid
-          path: bin/Vivid.exe
+          v="${{ steps.v.outputs.version }}"
+          gh release create "v$v" bin/Vivid.exe --target "$GITHUB_SHA" --title "Vivid $v" --generate-notes
