@@ -696,31 +696,25 @@ namespace Vivid
 
             secMain = right.Add(new Section("Rust", "Black holo", Icons.Crosshair, Theme.Accent, null));
             secMain.AddRow(new ControlRow("Black holo",
-                () => "Turns the holosight's reticle black on your screen, both in hip fire and when aiming. Rust has to run in borderless or windowed mode.",
+                () => "Turns the holosight's reticle black wherever it is on screen, in hip fire and when aiming. Rust has to run in borderless or windowed mode.",
                 new Toggle { Get = () => H.Enabled, Set = v => Ctl.SetHoloEnabled(v) }, 44, 26));
             secMain.AddRow(new ControlRow("Only while Rust is in front",
                 () => "Pauses whenever another window is in front, so nothing else on your screen changes.",
                 new Toggle { Get = () => H.OnlyInRust, Set = v => { H.OnlyInRust = v; Ctl.HoloChanged(); } }, 44, 26));
-            secMain.AddRow(new WideRow("Area", new Segmented
-            {
-                Options = new[] { "Aiming", "Aim + hip fire", "Large" },
-                Get = () => H.Area,
-                Set = i => { H.Area = i; Ctl.HoloChanged(); }
-            }, 360));
             int n = Math.Max(1, Math.Min(4, Screen.AllScreens.Length));
             var opts = new string[n];
             opts[0] = "Main";
             for (int i = 1; i < n; i++) opts[i] = "Display " + (i + 1);
-            var disp = secMain.AddRow(new WideRow("Display", new Segmented { Options = opts, Get = () => Math.Min(H.Display, opts.Length - 1), Set = i => { H.Display = i; Ctl.HoloChanged(); } }, 120 * n));
+            var disp = secMain.AddRow(new WideRow("Display when Rust isn't in front", new Segmented { Options = opts, Get = () => Math.Min(H.Display, opts.Length - 1), Set = i => { H.Display = i; Ctl.HoloChanged(); } }, 120 * n));
             disp.Visible = n > 1;
-            secMain.FooterNote = () => "Aim + hip fire watches the middle of the screen where the sight sits. Bright red things in that area (like red tree markers) can turn black too.";
+            secMain.FooterNote = () => "While it's on, you see Rust through " + AppInfo.Name + ": every frame is copied, the reticle's colour is swapped on your graphics card and the result is shown on top, about a frame behind the game. It never touches Rust's files or memory.";
 
             secColor = right.Add(new Section("Colours", "Reticle colour", Icons.Drop, Theme.Green, null));
             secColor.AddRow(new WideRow("Reticle in Rust", Swatches(Reticles, () => H.Target, v => H.Target = v)));
             secColor.AddRow(new WideRow("Turns into", Swatches(Outputs, () => H.Output, v => H.Output = v)));
             secColor.AddRow(new SliderRow("Tolerance", 0, 100, 45, 1, () => H.Tolerance, v => { H.Tolerance = (int)Math.Round(v); Ctl.HoloChanged(); },
                 v => (int)v + "%", SliderLook.Neutral, Theme.Text));
-            secColor.FooterNote = () => "If you set a different holosight colour in Rust's accessibility settings, pick the same one here. Raise Tolerance if parts of the glow stay coloured, lower it if other things turn black.";
+            secColor.FooterNote = () => "Anything on screen with exactly the reticle's colour turns black too. If red things you care about change, set the holosight to an unusual colour in Rust's accessibility settings (like magenta) and pick the same one here. Raise Tolerance if parts of the glow stay coloured, lower it if other things turn black.";
 
             bar = Add(new Panel { Painter = PaintBar });
             onToggle = Add(new Toggle { Get = () => H.Enabled, Set = v => Ctl.SetHoloEnabled(v) });
@@ -820,9 +814,9 @@ namespace Vivid
             var st = o?.State ?? HoloOverlay.RunState.Off;
             string text; Color c; bool pulse = false;
             if (!H.Enabled) { text = "Off"; c = Theme.TextDim; }
-            else if (st == HoloOverlay.RunState.Unsupported) { text = Native.IsWindows ? "Stopped: something went wrong (see error.log)" : "Only works on Windows"; c = Theme.Red; }
+            else if (st == HoloOverlay.RunState.Unsupported) { text = !Native.IsWindows ? "Only works on Windows" : o.Problem ?? "Stopped: something went wrong (see error.log)"; c = Theme.Red; }
             else if (st == HoloOverlay.RunState.WaitingForRust) { text = "On · waiting for Rust to be in front"; c = Theme.Amber; }
-            else if (st == HoloOverlay.RunState.Running) { text = "Working · " + o.Fps + " fps · " + o.FrameMs.ToString("0.0") + " ms per frame · " + o.Changed + " px recolored"; c = Theme.Green; pulse = true; }
+            else if (st == HoloOverlay.RunState.Running) { text = "Working · " + o.Fps + " fps · " + o.FrameMs.ToString("0.0") + " ms per frame"; c = Theme.Green; pulse = true; }
             else { text = "Starting…"; c = Theme.Amber; }
             Theme.PulseDot(g, new PointF(x + 4 * S, r.Y + 41 * S), 8 * S, c, pulse);
             Theme.Txt(g, text, Theme.F(14, semibold: true), Theme.Text, new RectangleF(x + 22 * S, r.Y + 29 * S, Math.Max(20, onToggle.Bounds.X - x - 46 * S), 24 * S));

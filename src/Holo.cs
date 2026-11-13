@@ -159,31 +159,15 @@ namespace Vivid
 
         static uint Pack(Color c, int a) =>
             (uint)a << 24 | (uint)(c.R * a / 255) << 16 | (uint)(c.G * a / 255) << 8 | (uint)(c.B * a / 255);
-
-        /// <summary>Area of the screen to watch, as fractions of the display: aiming only, aim + hip fire, large.</summary>
-        public static RectangleF AreaFraction(int area)
-        {
-            switch (area)
-            {
-                case 0: return RectangleF.FromLTRB(0.40f, 0.36f, 0.60f, 0.64f);
-                case 2: return RectangleF.FromLTRB(0.15f, 0.12f, 0.92f, 0.96f);
-                default: return RectangleF.FromLTRB(0.28f, 0.28f, 0.84f, 0.90f);
-            }
-        }
-
-        public static Rectangle AreaOn(Rectangle display, int area)
-        {
-            var f = AreaFraction(area);
-            return Rectangle.FromLTRB(
-                display.X + (int)(display.Width * f.Left), display.Y + (int)(display.Height * f.Top),
-                display.X + (int)(display.Width * f.Right), display.Y + (int)(display.Height * f.Bottom));
-        }
     }
 
     /// <summary>
-    /// Keeps the Rust holosight reticle black: every frame it copies the watched part of the screen,
-    /// finds the reticle's pixels and covers them on a click-through overlay. Runs on its own thread.
-    /// The overlay is left out of screen captures, so it never sees its own output.
+    /// Keeps the Rust holosight reticle black. While Rust is in front it shows Rust's monitor through
+    /// <see cref="HoloGpu"/>: each finished frame is captured, the reticle's colour is swapped on the GPU and the
+    /// result is shown in a click-through window on top. The whole picture goes through the same shader in the
+    /// same frame, so the recolour stays exactly on the reticle as it sways and recoils, with no fringe and no
+    /// patches left behind. The window is left out of screen captures, so it never sees its own output.
+    /// Runs on its own thread.
     /// </summary>
     public sealed class HoloOverlay : IDisposable
     {
@@ -196,8 +180,10 @@ namespace Vivid
 
         // live stats for the UI
         public volatile RunState State = RunState.Off;
-        public volatile int Fps, Changed;
+        public volatile int Fps;
         public volatile float FrameMs;
+        /// <summary>Why it can't run right now (shown on the Holo page), or null.</summary>
+        public volatile string Problem;
 
         public void Update(HoloSettings s)
         {
@@ -221,61 +207,92 @@ namespace Vivid
             thread = null;
         }
 
-        sealed class Win : NativeWindow
+        /// <summary>The click-through, never-activated window the recoloured picture is shown in.</summary>
+        internal sealed class Win : NativeWindow
         {
             protected override void WndProc(ref Message m)
             {
-                if (m.Msg == Native.WM_NCHITTEST) { m.Result = new IntPtr(-1); return; }
+                switch (m.Msg)
+                {
+                    case Native.WM_NCHITTEST: m.Result = new IntPtr(-1); return;  // HTTRANSPARENT
+                    case 0x0021: m.Result = new IntPtr(3); return;                 // WM_MOUSEACTIVATE: MA_NOACTIVATE
+                    case 0x0014: m.Result = new IntPtr(1); return;                 // WM_ERASEBKGND: Direct3D draws everything
+                    case 0x000F: HoloNative.ValidateRect(m.HWnd, IntPtr.Zero); m.Result = IntPtr.Zero; return; // WM_PAINT
+                }
                 base.WndProc(ref m);
+            }
+
+            public static Win Create()
+            {
+                var win = new Win();
+                win.CreateHandle(new CreateParams
+                {
+                    Caption = AppInfo.Name + " holo",
+                    Style = unchecked((int)0x80000000), // WS_POPUP
+                    // Layered + transparent: clicks and keys go straight to the game, and Windows doesn't treat the
+                    // window as covering Rust (so Rust keeps rendering normally).
+                    ExStyle = Native.WS_EX_LAYERED | Native.WS_EX_TRANSPARENT | Native.WS_EX_TOOLWINDOW | Native.WS_EX_TOPMOST | Native.WS_EX_NOACTIVATE,
+                });
+                HoloNative.SetLayeredWindowAttributes(win.Handle, 0, 255, 2 /* LWA_ALPHA */);
+                return win;
             }
         }
 
-        unsafe void Run()
+        static string Describe(Exception ex)
         {
-            var win = new Win();
-            win.CreateHandle(new CreateParams
-            {
-                Caption = "",
-                Style = unchecked((int)0x80000000), // WS_POPUP
-                ExStyle = Native.WS_EX_LAYERED | Native.WS_EX_TRANSPARENT | Native.WS_EX_TOOLWINDOW | Native.WS_EX_TOPMOST | Native.WS_EX_NOACTIVATE,
-            });
-            IntPtr hwnd = win.Handle;
-            try { HoloNative.SetWindowDisplayAffinity(hwnd, HoloNative.WDA_EXCLUDEFROMCAPTURE); } catch { }
-            try { HoloNative.timeBeginPeriod(1); } catch { }
+            int hr = ex.HResult;
+            if (ex is DllNotFoundException || ex is EntryPointNotFoundException) return "Direct3D 11 isn't available on this PC";
+            if (ex is NotSupportedException) return "Rotated displays aren't supported";
+            if (hr == HoloGpu.E_ACCESSDENIED) return "Windows paused screen capture (UAC prompt or lock screen). Trying again…";
+            if (hr == HoloGpu.DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) return "Too many apps are capturing this display. Close recording apps and it'll start";
+            if (hr == HoloGpu.DXGI_ERROR_UNSUPPORTED) return "This display or graphics driver doesn't support screen capture";
+            if (hr == HoloGpu.DXGI_ERROR_DEVICE_REMOVED || hr == HoloGpu.DXGI_ERROR_DEVICE_RESET) return "The graphics driver restarted. Trying again…";
+            return "Couldn't start: " + ex.Message;
+        }
 
-            var matcher = new HoloMatcher();
-            IntPtr screenDc = Native.GetDC(IntPtr.Zero);
-            IntPtr capDc = Native.CreateCompatibleDC(screenDc), outDc = Native.CreateCompatibleDC(screenDc);
-            IntPtr capBmp = IntPtr.Zero, outBmp = IntPtr.Zero, capOld = IntPtr.Zero, outOld = IntPtr.Zero;
-            byte* capBits = null, outBits = null;
-            Rectangle area = Rectangle.Empty;
-            bool shown = false, anything = false, full = false;
+        void Run()
+        {
+            // Physical pixels on every monitor, so the window lines up with the captured picture.
+            try { HoloNative.SetThreadDpiAwarenessContext(new IntPtr(-4)); } catch { }
+            var win = Win.Create();
+            IntPtr hwnd = win.Handle;
+            bool excluded = false;
+            try { excluded = HoloNative.SetWindowDisplayAffinity(hwnd, HoloNative.WDA_EXCLUDEFROMCAPTURE); } catch { }
+
+            HoloGpu gpu = null;
+            bool shown = false;
+            int hiddenAt = Environment.TickCount, lastTop = 0, lastFail = int.MinValue / 2, lastFsCheck = 0, lastFresh = 0;
+            bool exclusive = false;
+            string lastLogged = null;
             var fpsClock = Stopwatch.StartNew();
-            var frameClock = new Stopwatch();
-            int frames = 0, lastTop = 0;
-            int rustPid = -1; DateTime rustChecked = DateTime.MinValue; bool rustFront = false;
+            int frames = 0;
+            IntPtr lastFg = IntPtr.Zero; bool fgIsRust = false;
 
             void Hide()
             {
                 if (!shown) return;
                 HoloNative.ShowWindow(hwnd, 0);
                 shown = false;
+                hiddenAt = Environment.TickCount;
             }
-
-            void Allocate(Rectangle a)
+            void Drop()
             {
-                if (capBmp != IntPtr.Zero) { Native.SelectObject(capDc, capOld); Native.DeleteObject(capBmp); }
-                if (outBmp != IntPtr.Zero) { Native.SelectObject(outDc, outOld); Native.DeleteObject(outBmp); }
-                capBmp = HoloNative.Dib(screenDc, a.Width, a.Height, out IntPtr cb);
-                outBmp = HoloNative.Dib(screenDc, a.Width, a.Height, out IntPtr ob);
-                capBits = (byte*)cb; outBits = (byte*)ob;
-                capOld = Native.SelectObject(capDc, capBmp);
-                outOld = Native.SelectObject(outDc, outBmp);
-                for (int i = 0; i < a.Width * a.Height; i++) ((uint*)outBits)[i] = 0;
-                matcher.Resize(a.Width, a.Height);
-                area = a;
-                anything = true; // push the cleared surface once
-                full = true;     // the window changed size: send all of it
+                Hide();
+                gpu?.Dispose();
+                gpu = null;
+            }
+            void Fail(Exception ex)
+            {
+                Drop();
+                lastFail = Environment.TickCount;
+                Problem = Describe(ex);
+                State = RunState.Unsupported;
+                if (Problem != lastLogged) { lastLogged = Problem; Program.Log(ex); }
+            }
+            void Place()
+            {
+                var b = gpu.Bounds;
+                HoloNative.SetWindowPos(hwnd, HoloNative.HWND_TOPMOST, b.Left, b.Top, b.Right - b.Left, b.Bottom - b.Top, 0x0010 | 0x0200); // NOACTIVATE|NOOWNERZORDER
             }
 
             try
@@ -286,55 +303,104 @@ namespace Vivid
                     var s = settings;
                     if (s == null || !s.Enabled)
                     {
-                        Hide(); State = RunState.Off; Fps = 0; Changed = 0;
+                        Drop(); State = RunState.Off; Problem = null; Fps = 0;
                         wake.WaitOne(500);
                         continue;
                     }
+                    if (!excluded)
+                    {
+                        // Without this the capture would see our own window and feed back into itself.
+                        Drop(); State = RunState.Unsupported; Problem = "Needs Windows 10 version 2004 or newer";
+                        wake.WaitOne(1000);
+                        continue;
+                    }
 
-                    // only while Rust is the window in front
+                    IntPtr monitor;
                     if (s.OnlyInRust)
                     {
-                        if ((DateTime.UtcNow - rustChecked).TotalMilliseconds > 250)
+                        IntPtr fg = HoloNative.GetForegroundWindow();
+                        if (fg != lastFg)
                         {
-                            rustChecked = DateTime.UtcNow;
-                            HoloNative.GetWindowThreadProcessId(HoloNative.GetForegroundWindow(), out int pid);
-                            if (pid != rustPid)
-                            {
-                                rustPid = pid;
-                                try { using (var p = Process.GetProcessById(pid)) rustFront = p.ProcessName.StartsWith("RustClient", StringComparison.OrdinalIgnoreCase); }
-                                catch { rustFront = false; }
-                            }
+                            lastFg = fg; fgIsRust = false;
+                            HoloNative.GetWindowThreadProcessId(fg, out int pid);
+                            try { using (var p = Process.GetProcessById(pid)) fgIsRust = p.ProcessName.StartsWith("RustClient", StringComparison.OrdinalIgnoreCase); }
+                            catch { }
                         }
-                        if (!rustFront) { Hide(); State = RunState.WaitingForRust; Fps = 0; Changed = 0; wake.WaitOne(150); continue; }
+                        if (!fgIsRust || HoloNative.IsIconic(fg))
+                        {
+                            Hide();
+                            if (gpu != null && Environment.TickCount - hiddenAt > 3000) Drop(); // let go of the capture while away
+                            State = RunState.WaitingForRust; Problem = null; Fps = 0;
+                            wake.WaitOne(100);
+                            continue;
+                        }
+                        if (Environment.TickCount - lastFsCheck > 1000)
+                        {
+                            lastFsCheck = Environment.TickCount;
+                            exclusive = HoloNative.SHQueryUserNotificationState(out int qs) == 0 && qs == 3; // QUNS_RUNNING_D3D_FULL_SCREEN
+                        }
+                        if (exclusive)
+                        {
+                            Drop(); State = RunState.Unsupported;
+                            Problem = "Rust is in exclusive fullscreen. Set Rust to borderless (or windowed) so the black holo can show on top";
+                            wake.WaitOne(500);
+                            continue;
+                        }
+                        monitor = HoloNative.MonitorFromWindow(fg, 2);
                     }
-
-                    var screens = Screen.AllScreens;
-                    var disp = screens[Math.Min(Math.Max(0, s.Display), screens.Length - 1)].Bounds;
-                    var want = HoloMatcher.AreaOn(disp, s.Area);
-                    if (want != area) Allocate(want);
-                    matcher.Configure(s);
-
-                    // wait for the next screen refresh, then work on the newest frame
-                    try { HoloNative.DwmFlush(); } catch { Thread.Sleep(5); }
-                    frameClock.Restart();
-                    HoloNative.BitBlt(capDc, 0, 0, area.Width, area.Height, screenDc, area.X, area.Y, HoloNative.SRCCOPY);
-                    HoloNative.GdiFlush();
-                    matcher.Process(capBits, outBits, Color.FromArgb(s.Output));
-
-                    if (matcher.Changed > 0 || anything)
+                    else
                     {
-                        var dirty = full || matcher.Dirty.IsEmpty ? new Rectangle(0, 0, area.Width, area.Height) : matcher.Dirty;
-                        HoloNative.Push(hwnd, screenDc, outDc, area, dirty);
-                        full = false;
-                        if (!shown) { HoloNative.ShowWindow(hwnd, 4); shown = true; } // SW_SHOWNOACTIVATE
+                        var screens = Screen.AllScreens;
+                        var b = screens[Math.Min(Math.Max(0, s.Display), screens.Length - 1)].Bounds;
+                        monitor = HoloNative.MonitorFromPoint(new Native.POINT(b.X + b.Width / 2, b.Y + b.Height / 2), 2);
                     }
-                    anything = matcher.Changed > 0;
-                    if (Environment.TickCount - lastTop > 1000) { lastTop = Environment.TickCount; HoloNative.KeepOnTop(hwnd); }
 
-                    FrameMs = (float)frameClock.Elapsed.TotalMilliseconds;
-                    Changed = matcher.Changed;
-                    State = RunState.Running;
-                    frames++;
+                    if (gpu != null && gpu.Monitor != monitor) Drop();
+                    if (gpu == null)
+                    {
+                        if (Environment.TickCount - lastFail < 2000) { wake.WaitOne(200); continue; }
+                        try
+                        {
+                            gpu = HoloGpu.ForMonitor(monitor);
+                            Place();
+                            gpu.AttachWindow(hwnd);
+                            gpu.StartCapture();
+                            Place();
+                        }
+                        catch (Exception ex) { Fail(ex); continue; }
+                    }
+
+                    HoloGpu.FrameResult r;
+                    try
+                    {
+                        gpu.Configure(s);
+                        r = gpu.Frame(50);
+                        if (r == HoloGpu.FrameResult.Lost)
+                        {
+                            // display mode change, UAC prompt or lock screen: pick up again with the new picture
+                            Hide();
+                            gpu.StartCapture();
+                            Place();
+                            continue;
+                        }
+                    }
+                    catch (Exception ex) { Fail(ex); continue; }
+
+                    if (r == HoloGpu.FrameResult.Presented)
+                    {
+                        if (!shown) { HoloNative.ShowWindow(hwnd, 4); shown = true; } // SW_SHOWNOACTIVATE, after the first new frame
+                        lastFresh = Environment.TickCount;
+                        frames++;
+                        FrameMs = gpu.LastWorkMs;
+                    }
+                    else if (shown && Environment.TickCount - lastFresh > 600)
+                    {
+                        // No new picture for a while (a still menu, or capture stalled): step aside so the game
+                        // itself shows. It comes back with the next frame that changes.
+                        Hide();
+                    }
+                    if (shown && Environment.TickCount - lastTop > 1000) { lastTop = Environment.TickCount; HoloNative.KeepOnTop(hwnd); }
+                    State = RunState.Running; Problem = null;
                     if (fpsClock.ElapsedMilliseconds >= 1000) { Fps = frames; frames = 0; fpsClock.Restart(); }
                 }
             }
@@ -342,17 +408,14 @@ namespace Vivid
             {
                 Program.Log(ex);
                 State = RunState.Unsupported;
+                Problem = Describe(ex);
             }
             finally
             {
-                Hide();
-                if (capBmp != IntPtr.Zero) { Native.SelectObject(capDc, capOld); Native.DeleteObject(capBmp); }
-                if (outBmp != IntPtr.Zero) { Native.SelectObject(outDc, outOld); Native.DeleteObject(outBmp); }
-                Native.DeleteDC(capDc); Native.DeleteDC(outDc);
-                Native.ReleaseDC(IntPtr.Zero, screenDc);
-                try { HoloNative.timeEndPeriod(1); } catch { }
+                Drop();
                 win.DestroyHandle();
-                State = RunState.Off;
+                if (State != RunState.Unsupported) State = RunState.Off;
+                thread = null;
             }
         }
     }
@@ -360,62 +423,21 @@ namespace Vivid
     static class HoloNative
     {
         public const uint WDA_EXCLUDEFROMCAPTURE = 0x11;
-        public const int SRCCOPY = 0x00CC0020;
+        public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
 
         [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint affinity);
+        [DllImport("user32.dll")] public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint key, byte alpha, uint flags);
+        [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
         [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+        [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hWnd);
+        [DllImport("user32.dll")] public static extern bool ValidateRect(IntPtr hWnd, IntPtr rect);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int pid);
-        [DllImport("gdi32.dll")] public static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, int rop);
-        [DllImport("gdi32.dll")] public static extern bool GdiFlush();
-        [DllImport("dwmapi.dll")] public static extern int DwmFlush();
-        [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
-        [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint ms);
+        [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+        [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(Native.POINT pt, uint flags);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("shell32.dll")] public static extern int SHQueryUserNotificationState(out int state);
 
-        [StructLayout(LayoutKind.Sequential)]
-        struct BITMAPINFOHEADER
-        {
-            public int biSize, biWidth, biHeight; public short biPlanes, biBitCount;
-            public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant;
-        }
-        [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
-
-        /// <summary>32-bit top-down bitmap whose pixels we can read and write directly.</summary>
-        public static IntPtr Dib(IntPtr dc, int w, int h, out IntPtr bits)
-        {
-            var bi = new BITMAPINFOHEADER { biSize = Marshal.SizeOf(typeof(BITMAPINFOHEADER)), biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32 };
-            return CreateDIBSection(dc, ref bi, 0, out bits, IntPtr.Zero, 0);
-        }
-
-        [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
-        [StructLayout(LayoutKind.Sequential)]
-        struct UPDATELAYEREDWINDOWINFO
-        {
-            public int cbSize; public IntPtr hdcDst; public IntPtr pptDst; public IntPtr psize; public IntPtr hdcSrc; public IntPtr pptSrc;
-            public int crKey; public IntPtr pblend; public int dwFlags; public IntPtr prcDirty;
-        }
-        [DllImport("user32.dll")] static extern bool UpdateLayeredWindowIndirect(IntPtr hwnd, ref UPDATELAYEREDWINDOWINFO info);
-
-        /// <summary>Shows the overlay's pixels; only the dirty part is sent to the compositor.</summary>
-        public static unsafe void Push(IntPtr hwnd, IntPtr screenDc, IntPtr srcDc, Rectangle area, Rectangle dirty)
-        {
-            var dst = new Native.POINT(area.X, area.Y);
-            var size = new Native.SIZE(area.Width, area.Height);
-            var src = new Native.POINT(0, 0);
-            var blend = new Native.BLENDFUNCTION { BlendOp = Native.AC_SRC_OVER, SourceConstantAlpha = 255, AlphaFormat = Native.AC_SRC_ALPHA };
-            var rc = new RECT { Left = dirty.Left, Top = dirty.Top, Right = dirty.Right, Bottom = dirty.Bottom };
-            var info = new UPDATELAYEREDWINDOWINFO
-            {
-                cbSize = Marshal.SizeOf(typeof(UPDATELAYEREDWINDOWINFO)),
-                hdcDst = screenDc, pptDst = (IntPtr)(&dst), psize = (IntPtr)(&size), hdcSrc = srcDc, pptSrc = (IntPtr)(&src),
-                pblend = (IntPtr)(&blend), dwFlags = Native.ULW_ALPHA, prcDirty = (IntPtr)(&rc),
-            };
-            if (!UpdateLayeredWindowIndirect(hwnd, ref info))
-                Native.UpdateLayeredWindow(hwnd, screenDc, ref dst, ref size, srcDc, ref src, 0, ref blend, Native.ULW_ALPHA);
-        }
-
-        static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
-        [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
         public static void KeepOnTop(IntPtr hwnd) => SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0200); // NOSIZE|NOMOVE|NOACTIVATE|NOOWNERZORDER
 
         [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int x, y; }

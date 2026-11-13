@@ -216,11 +216,11 @@ namespace Vivid
         public int Output { get; set; } = unchecked((int)0xFF000000);
         /// <summary>0–100: how far from the target colour still counts as the reticle.</summary>
         public int Tolerance { get; set; } = 45;
-        /// <summary>0 = middle only (aiming), 1 = aiming and hip fire, 2 = most of the screen.</summary>
+        /// <summary>Not used since 1.6 (the whole picture is recoloured); kept so older settings files still load.</summary>
         public int Area { get; set; } = 1;
         /// <summary>Only work while Rust is the window in front.</summary>
         public bool OnlyInRust { get; set; } = true;
-        public int Display { get; set; } = 0; // index into Screen.AllScreens, 0 = primary
+        public int Display { get; set; } = 0; // index into Screen.AllScreens, 0 = primary; used when OnlyInRust is off
 
         public HoloSettings Clone() => (HoloSettings)MemberwiseClone();
 

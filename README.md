@@ -28,7 +28,7 @@ Closing the window keeps Fjord Vision running in the tray so your filters stay o
   - `Ctrl+F8`: black holo on/off
 
   Each profile can also have its own key. Pressing that key a second time turns filters off, so it's easy to compare with and without filters.
-- **Black holo (Rust):** The **Holo** tab turns the holosight's red reticle black on screen, in hip fire and when aiming. Every frame Fjord Vision looks at the middle of the screen, finds the reticle's pixels and covers them on a click-through overlay that's left out of screen captures. Pick the reticle color you use in Rust, what it turns into (black by default), how big an area to watch, and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode.
+- **Black holo (Rust):** The **Holo** tab turns the holosight's reticle black wherever it is on screen, in hip fire and when aiming. While Rust is in front, Fjord Vision shows Rust's monitor through your graphics card: Desktop Duplication hands over each finished frame, a pixel shader swaps the reticle's colour (plus its glow and anti-aliased edge), and the result is shown in a click-through window that's left out of screen captures. Every pixel goes through the same shader in the same frame, so the recolour stays on the reticle as it sways and recoils. Large patches of the colour (damage effects, signs) are left alone. Pick the reticle color you use in Rust, what it turns into (black by default), and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode, and Windows 10 version 2004 or newer is needed.
 - **Automatic updates:** Fjord Vision checks this repository's releases, downloads the new version and swaps it in place, whatever you named the file. A **Restart to update** button appears when it's ready. Turn it off or check by hand in **Settings → Updates**.
 - **On-screen messages:** A short message appears when a hotkey switches something while you're in game.
 - **Tray, start with Windows, start minimized, single instance.**
@@ -80,7 +80,7 @@ sudo apt install dotnet-sdk-8.0 mono-devel
 ./build.sh
 ```
 
-This writes `bin/Vivid.exe`. `tests/run.sh` runs the logic tests: the color matrix math, gamma ramps, settings and profile files, share codes and the holo reticle detection.
+This writes `bin/Vivid.exe`. `tests/run.sh` runs the logic tests: the color matrix math, gamma ramps, settings and profile files, share codes and the holo reticle detection. `tests/gpu/run.sh` builds `bin/GpuSmoke.exe`, which runs the holo shaders on a test picture and compares them with the CPU matcher (run it on Windows, or under Wine with Wine Mono).
 
 Code layout:
 
@@ -89,7 +89,8 @@ Code layout:
 | `src/ColorMath.cs` | The filter math: the 5×5 matrix and the gamma curves |
 | `src/ColorEngine.cs` | Applies filters through the matrix, gamma ramp or NVIDIA vibrance, and restores them |
 | `src/NvVibrance.cs` | NVIDIA Digital Vibrance through `nvapi64.dll` |
-| `src/Holo.cs` | The black holo: finding the reticle's pixels and the overlay that recolors them |
+| `src/Holo.cs` | The black holo: the overlay window and its thread, plus the CPU matcher used for the preview |
+| `src/HoloGpu.cs` | The black holo on the GPU: screen capture, the recolour shaders and the swap chain |
 | `src/Overlays.cs` | The click-through overlay window and the on-screen messages |
 | `src/AppController.cs` | App state, profiles and hotkeys |
 | `src/AppInfo.cs` | Name, version, fjord.wtf link and the GitHub repo used for updates |
