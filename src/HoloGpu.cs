@@ -6,8 +6,10 @@ namespace Vivid
 {
     /// <summary>
     /// The black holo's GPU side. Desktop Duplication hands over each finished picture of the monitor Rust is on;
-    /// two small pixel shaders swap the holosight's colour (plus its glow and anti-aliased edge) and the result is
-    /// shown in a click-through window over the game. The window is left out of screen captures, so it never
+    /// two small pixel shaders swap the holosight's colour (plus its bright core, glow and anti-aliased edge) and the
+    /// result is shown in a click-through window over the game. Only tiles where the holo is get recoloured: a
+    /// 16×16-px summary of every frame is read back (two frames late, never waiting on the GPU) and
+    /// <see cref="HoloZones"/> works out where the holosight is. The window is left out of screen captures, so it never
     /// sees itself. Because every pixel of the picture goes through the same shader in the same frame, the
     /// recolour sits exactly on the reticle wherever it is, with no separate layer to fall behind.
     /// Nothing here touches the game's process, files or memory.
@@ -21,7 +23,7 @@ namespace Vivid
                   Dev_CreateVS = 12, Dev_CreatePS = 15, Dev_GetDeviceRemovedReason = 39;
         const int Ctx_PSSetShaderResources = 8, Ctx_PSSetShader = 9, Ctx_VSSetShader = 11, Ctx_GenerateMips = 54, Ctx_Draw = 13, Ctx_Map = 14, Ctx_Unmap = 15,
                   Ctx_PSSetConstantBuffers = 16, Ctx_IASetInputLayout = 17, Ctx_IASetTopology = 24, Ctx_OMSetRenderTargets = 33,
-                  Ctx_RSSetViewports = 44, Ctx_CopyResource = 47, Ctx_UpdateSubresource = 48, Ctx_ClearState = 110, Ctx_Flush = 111;
+                  Ctx_RSSetViewports = 44, Ctx_CopySubresourceRegion = 46, Ctx_CopyResource = 47, Ctx_UpdateSubresource = 48, Ctx_ClearState = 110, Ctx_Flush = 111;
         const int Obj_GetParent = 6, Dev1_SetMaximumFrameLatency = 12, Adapter_EnumOutputs = 7, Output_GetDesc = 7,
                   Output1_DuplicateOutput = 22, Output5_DuplicateOutput1 = 26;
         const int Dup_GetDesc = 7, Dup_AcquireNextFrame = 8, Dup_ReleaseFrame = 14;
@@ -44,7 +46,8 @@ namespace Vivid
         public const int DXGI_ERROR_WAIT_TIMEOUT = unchecked((int)0x887A0027);
         public const int E_ACCESSDENIED = unchecked((int)0x80070005);
 
-        const uint FMT_B8G8R8A8 = 87, FMT_R8G8 = 49;
+        const uint FMT_B8G8R8A8 = 87, FMT_R8G8B8A8 = 28, FMT_R8 = 61;
+        public const int DXGI_ERROR_WAS_STILL_DRAWING = unchecked((int)0x887A000A);
         const int CoverageMip = 4; // 16×16 px tiles
         const uint BIND_CONSTANT_BUFFER = 0x4, BIND_SHADER_RESOURCE = 0x8, BIND_RENDER_TARGET = 0x20;
         const uint USAGE_DEFAULT = 0, USAGE_STAGING = 3, CPU_ACCESS_READ = 0x20000;
@@ -74,7 +77,7 @@ namespace Vivid
         [StructLayout(LayoutKind.Sequential)]
         struct VIEWPORT { public float X, Y, Width, Height, MinDepth, MaxDepth; }
         [StructLayout(LayoutKind.Sequential)]
-        struct Params { public float TgtH, TgtS, TgtV, Grey, HueWin, SatMin, ValMin, Tol, OutR, OutG, OutB, Pad, W, H, Pad2, Pad3; }
+        internal struct Params { public float TgtH, TgtS, TgtV, Grey, HueWin, SatMin, ValMin, Tol, OutR, OutG, OutB, Pad, W, H, Pad2, Pad3; }
 
         // ---------- native entry points ----------
         [DllImport("d3d11.dll")]
@@ -109,7 +112,8 @@ namespace Vivid
         const string Hlsl = @"
 cbuffer P : register(b0) { float4 Tgt; float4 Thr; float4 Outc; float4 Size; };
 Texture2D<float4> Src : register(t0);
-Texture2D<float2> Cls : register(t1);   // r: class, g: 1 on reticle-coloured pixels (mip 4: share of each 16x16 tile)
+Texture2D<float4> Cls : register(t1);   // r: 1 reticle colour, 0.66 over-bright core, 0.33 glow; g: 1 on reticle colour; b: brightness
+Texture2D<float> Zone : register(t2);   // 1 on the 16 px tiles where the holo is (worked out on the CPU)
 
 float4 VS(uint id : SV_VertexID) : SV_Position {
     float2 t = float2((id << 1) & 2, id & 2);
@@ -125,33 +129,40 @@ float3 Hsv(float3 c) {
     }
     return float3(h, mx > 0 ? d / mx : 0, mx);
 }
-// 1 = the reticle's colour, 0.5 = its glow (only used next to the reticle), 0 = anything else
+// same rules as HoloRule.Classify
 float Classify(float3 c) {
     float3 h = Hsv(c);
-    if (Tgt.w > 0.5) return (h.y < 0.12 + 0.1 * Thr.w && h.z >= Tgt.z - 0.08 - 0.2 * Thr.w) ? 1 : 0;
+    if (Tgt.w > 0.5) return (h.y < 0.12 + 0.1 * Thr.w && h.z >= Tgt.z - 0.06 - 0.15 * Thr.w) ? 1 : 0;
     float dh = abs(h.x - Tgt.x);
     if (dh > 180) dh = 360 - dh;
     if (dh <= Thr.x && h.y >= Thr.y && h.z >= Thr.z) return 1;
-    if (dh <= Thr.x * 1.5 && h.y >= 0.12 && h.z >= 0.5) return 0.5;
+    if (h.z >= 0.82 && h.y <= 0.5 && (dh <= Thr.x * 2.5 || h.y < 0.1)) return 0.66;
+    if (dh <= max(Thr.x * 1.8, 35) && h.y >= 0.15 && h.z >= 0.2) return 0.33;
     return 0;
 }
-float2 PSClass(float4 p : SV_Position) : SV_Target { float k = Classify(Src.Load(int3(p.xy, 0)).rgb); return float2(k, k > 0.75 ? 1 : 0); }
+float4 PSClass(float4 p : SV_Position) : SV_Target {
+    float3 c = Src.Load(int3(p.xy, 0)).rgb;
+    float k = Classify(c);
+    return float4(k, k > 0.9 ? 1 : 0, dot(c, float3(0.299, 0.587, 0.114)), 1);
+}
 float4 PSMain(float4 p : SV_Position) : SV_Target {
     int2 q = int2(p.xy);
     float3 c = Src.Load(int3(q, 0)).rgb;
-    float self = Cls.Load(int3(q, 0)).r;
-    // A reticle is thin lines and a dot: it never fills much of a 16 px tile. Big patches of the colour
-    // (damage effects, signs, a red sky) are left alone, edges included (this tile and the 8 around it).
     int2 t = q >> COVERAGE_MIP;
+    // only where the holo is; everything else on screen is passed through untouched
+    if (Zone.Load(int3(t, 0)) < 0.5) return float4(c, 1);
+    // A reticle is thin lines and a dot: it never fills much of a 16 px tile. Big patches of the colour
+    // are left alone, edges included (this tile and the 8 around it).
     float cov = 0;
 TILES
     if (cov > 0.45) return float4(c, 1);
-    if (self > 0.75) return float4(Outc.rgb, 1);
-    // strongest class within 1 px and within 2 px (only the reticle itself is above 0.75)
-    float near1 = 0, near2 = 0;
+    float self = Cls.Load(int3(q, 0)).r;
+    if (self > 0.9) return float4(Outc.rgb, 1);
+    // is there a reticle pixel within 3 px (for its core and glow) and within 1 px (soft edge)?
+    float nearG = 0, near1 = 0;
 NEIGHBOURS
-    if (near2 > 0.75 && self > 0.25) return float4(Outc.rgb, 1);              // glow next to the reticle
-    if (near1 > 0.75) return float4(lerp(c, Outc.rgb, 150.0 / 255.0), 1);     // soft 1 px edge (anti-aliasing)
+    if (nearG > 0.9 && self > 0.2) return float4(Outc.rgb, 1);
+    if (near1 > 0.9) return float4(lerp(c, Outc.rgb, 150.0 / 255.0), 1);
     return float4(c, 1);
 }";
 
@@ -159,8 +170,14 @@ NEIGHBOURS
         IntPtr factory, adapter, output, device, context, dup, swap, bbRtv;
         IntPtr vs, psClass, psMain, cbuf;
         Params pars;
-        IntPtr frameTex, frameSrv, clsTex, clsRtv, clsSrv;
-        int width, height;
+        IntPtr frameTex, frameSrv, clsTex, clsRtv, clsSrv, zoneTex, zoneSrv;
+        readonly IntPtr[] staging = new IntPtr[3];
+        int width, height, tilesW, tilesH;
+        long frameNo;
+        byte[] tileBgra = new byte[0], tileCov = new byte[0], tileLuma = new byte[0];
+        readonly System.Diagnostics.Stopwatch clock = System.Diagnostics.Stopwatch.StartNew();
+        /// <summary>Where the holo is on screen, learned from the frames (kept by the overlay across restarts).</summary>
+        public HoloZones Zones = new HoloZones();
         string paramKey;
         bool haveFrame;
 
@@ -176,9 +193,10 @@ NEIGHBOURS
         /// Picks the GPU and output that drive the given monitor and creates the device there.
         /// Then: <see cref="AttachWindow"/>, <see cref="StartCapture"/>, and <see cref="Frame"/> in a loop.
         /// </summary>
-        public static HoloGpu ForMonitor(IntPtr monitor)
+        public static HoloGpu ForMonitor(IntPtr monitor, HoloZones zones = null)
         {
             var g = new HoloGpu();
+            if (zones != null) g.Zones = zones;
             try
             {
                 g.Open(monitor);
@@ -249,13 +267,15 @@ NEIGHBOURS
             }
         }
 
-        static string ShaderSource()
+        internal static string ShaderSource()
         {
             var n = new StringBuilder();
-            for (int dy = -2; dy <= 2; dy++)
-                for (int dx = -2; dx <= 2; dx++)
+            int gr = HoloMatcher.Glow;
+            for (int dy = -gr; dy <= gr; dy++)
+                for (int dx = -gr; dx <= gr; dx++)
                 {
-                    n.Append("    { float v = Cls.Load(int3(q + int2(").Append(dx).Append(", ").Append(dy).Append("), 0)).r; near2 = max(near2, v);");
+                    if (dx == 0 && dy == 0) continue;
+                    n.Append("    { float v = Cls.Load(int3(q + int2(").Append(dx).Append(", ").Append(dy).Append("), 0)).r; nearG = max(nearG, v);");
                     if (Math.Abs(dx) <= 1 && Math.Abs(dy) <= 1) n.Append(" near1 = max(near1, v);");
                     n.Append(" }\n");
                 }
@@ -368,11 +388,58 @@ NEIGHBOURS
             var td = new TEXTURE2D_DESC { Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1, Format = FMT_B8G8R8A8, SampleCount = 1, Usage = USAGE_DEFAULT, BindFlags = BIND_SHADER_RESOURCE };
             frameTex = Texture(td, null, 0);
             frameSrv = View(Dev_CreateSRV, frameTex, "frame view");
-            td.Format = FMT_R8G8; td.BindFlags = BIND_SHADER_RESOURCE | BIND_RENDER_TARGET;
+            td.Format = FMT_R8G8B8A8; td.BindFlags = BIND_SHADER_RESOURCE | BIND_RENDER_TARGET;
             td.MipLevels = CoverageMip + 1; td.MiscFlags = 0x1; // GENERATE_MIPS
             clsTex = Texture(td, null, 0);
             clsRtv = View(Dev_CreateRTV, clsTex, "mask target");
             clsSrv = View(Dev_CreateSRV, clsTex, "mask view");
+
+            // one value per 16 px tile, like mip 4 of the mask
+            tilesW = Math.Max(1, w >> CoverageMip); tilesH = Math.Max(1, h >> CoverageMip);
+            var zd = new TEXTURE2D_DESC { Width = (uint)tilesW, Height = (uint)tilesH, MipLevels = 1, ArraySize = 1, Format = FMT_R8, SampleCount = 1, Usage = USAGE_DEFAULT, BindFlags = BIND_SHADER_RESOURCE };
+            zoneTex = Texture(zd, null, 0);
+            zoneSrv = View(Dev_CreateSRV, zoneTex, "zone view");
+            var sd = new TEXTURE2D_DESC { Width = (uint)tilesW, Height = (uint)tilesH, MipLevels = 1, ArraySize = 1, Format = FMT_R8G8B8A8, SampleCount = 1, Usage = USAGE_STAGING, CPUAccessFlags = CPU_ACCESS_READ };
+            for (int i = 0; i < staging.Length; i++) staging[i] = Texture(sd, null, 0);
+            tileBgra = new byte[tilesW * tilesH * 4];
+            tileCov = new byte[tilesW * tilesH]; tileLuma = new byte[tilesW * tilesH];
+            Zones.Resize(tilesW, tilesH, w, h);
+            frameNo = 0;
+            UploadZone(Zones.Zone);
+        }
+
+        void UploadZone(byte[] zone)
+        {
+            if (zoneTex == IntPtr.Zero) return;
+            fixed (byte* z = zone)
+                ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, void*, void*, uint, uint, void>)Fn(context, Ctx_UpdateSubresource))(context, zoneTex, 0, null, z, (uint)tilesW, 0);
+        }
+
+        /// <summary>Reads the tile summary of a frame from two frames ago (if the GPU is done with it) and updates the zones.</summary>
+        void PumpZones()
+        {
+            if (frameNo < 2) return;
+            IntPtr st = staging[(frameNo - 2) % staging.Length];
+            MAPPED_SUBRESOURCE m;
+            int hr = ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, int, uint, MAPPED_SUBRESOURCE*, int>)Fn(context, Ctx_Map))(context, st, 0, 1 /* READ */, 0x100000 /* DO_NOT_WAIT */, &m);
+            if (hr == DXGI_ERROR_WAS_STILL_DRAWING) return;
+            Check(hr, "Reading the tile summary");
+            try
+            {
+                for (int y = 0; y < tilesH; y++) Marshal.Copy((IntPtr)(m.Data + y * m.RowPitch), tileBgra, y * tilesW * 4, tilesW * 4);
+            }
+            finally { ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, void>)Fn(context, Ctx_Unmap))(context, st, 0); }
+            for (int i = 0, o = 0; i < tileCov.Length; i++, o += 4) { tileCov[i] = tileBgra[o + 1]; tileLuma[i] = tileBgra[o + 2]; }
+            Zones.Update(tileCov, tileLuma, clock.Elapsed.TotalMilliseconds);
+            UploadZone(Zones.Zone);
+        }
+
+        /// <summary>Copies this frame's tile summary (mip 4 of the mask) to a CPU-readable texture.</summary>
+        void QueueTileReadback()
+        {
+            IntPtr st = staging[frameNo % staging.Length];
+            ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, uint, uint, uint, IntPtr, uint, void*, void>)Fn(context, Ctx_CopySubresourceRegion))(context, st, 0, 0, 0, 0, clsTex, (uint)CoverageMip, null);
+            frameNo++;
         }
 
         IntPtr Texture(TEXTURE2D_DESC td, void* init, uint pitch)
@@ -393,6 +460,8 @@ NEIGHBOURS
         void ReleaseTargets()
         {
             Rel(ref frameSrv); Rel(ref frameTex); Rel(ref clsSrv); Rel(ref clsRtv); Rel(ref clsTex);
+            Rel(ref zoneSrv); Rel(ref zoneTex);
+            for (int i = 0; i < staging.Length; i++) Rel(ref staging[i]);
         }
 
         /// <summary>Creates the swap chain on the overlay window (sized to the captured display).</summary>
@@ -453,20 +522,15 @@ NEIGHBOURS
             ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, uint, void*, void*, uint, uint, void>)Fn(context, Ctx_UpdateSubresource))(context, cbuf, 0, null, &p, 0, 0);
         }
 
-        /// <summary>The same thresholds as <see cref="HoloMatcher.Configure"/>, so the preview matches the game.</summary>
-        static Params MakeParams(HoloSettings s)
+        /// <summary>The same thresholds as <see cref="HoloRule"/>, so the preview matches the game.</summary>
+        internal static Params MakeParams(HoloSettings s)
         {
-            var t = System.Drawing.Color.FromArgb(s.Target);
+            var r = HoloRule.From(s);
             var o = System.Drawing.Color.FromArgb(s.Output);
-            HoloMatcher.Hsv(t.R, t.G, t.B, out double th, out double ts, out double tv);
-            double tol = s.Tolerance / 100.0;
             return new Params
             {
-                TgtH = (float)th, TgtS = (float)ts, TgtV = (float)tv, Grey = ts < 0.15 ? 1 : 0,
-                HueWin = (float)(8 + 26 * tol),
-                SatMin = (float)Math.Max(0.22, ts * (0.78 - 0.4 * tol)),
-                ValMin = (float)Math.Max(0.18, tv * (0.62 - 0.32 * tol)),
-                Tol = (float)tol,
+                TgtH = (float)r.H, TgtS = (float)r.S, TgtV = (float)r.V, Grey = r.Grey ? 1 : 0,
+                HueWin = (float)r.HueWin, SatMin = (float)r.SatMin, ValMin = (float)r.ValMin, Tol = (float)r.Tol,
                 OutR = o.R / 255f, OutG = o.G / 255f, OutB = o.B / 255f,
             };
         }
@@ -511,7 +575,9 @@ NEIGHBOURS
         /// <summary>Recolours the current frame into the window and presents it.</summary>
         public void ShowFrame()
         {
+            PumpZones();
             Draw(bbRtv);
+            QueueTileReadback();
             int hr = ((delegate* unmanaged[Stdcall]<IntPtr, uint, uint, int>)Fn(swap, Swap_Present))(swap, 0, 0);
             if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET) Check(hr, "Present");
         }
@@ -538,9 +604,9 @@ NEIGHBOURS
             rt = target;
             ((delegate* unmanaged[Stdcall]<IntPtr, uint, IntPtr*, IntPtr, void>)Fn(ctx, Ctx_OMSetRenderTargets))(ctx, 1, &rt, IntPtr.Zero);
             ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, void>)Fn(ctx, Ctx_GenerateMips))(ctx, clsSrv); // coverage per tile
-            IntPtr* srvs = stackalloc IntPtr[2];
-            srvs[0] = frameSrv; srvs[1] = clsSrv;
-            ((delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)Fn(ctx, Ctx_PSSetShaderResources))(ctx, 0, 2, srvs);
+            IntPtr* srvs = stackalloc IntPtr[3];
+            srvs[0] = frameSrv; srvs[1] = clsSrv; srvs[2] = zoneSrv;
+            ((delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)Fn(ctx, Ctx_PSSetShaderResources))(ctx, 0, 3, srvs);
             ((delegate* unmanaged[Stdcall]<IntPtr, IntPtr, IntPtr*, uint, void>)Fn(ctx, Ctx_PSSetShader))(ctx, psMain, null, 0);
             ((delegate* unmanaged[Stdcall]<IntPtr, uint, uint, void>)Fn(ctx, Ctx_Draw))(ctx, 3, 0);
 
@@ -548,10 +614,13 @@ NEIGHBOURS
             ((delegate* unmanaged[Stdcall]<IntPtr, uint, uint, IntPtr*, void>)Fn(ctx, Ctx_PSSetShaderResources))(ctx, 1, 1, &none);
         }
 
-        /// <summary>For tests: runs the shaders on a BGRA picture and returns the result.</summary>
-        public byte[] Process(byte[] bgra, int w, int h)
+        /// <summary>For tests: runs the shaders on a BGRA picture and returns the result. zone: 255 per tile where
+        /// the holo is (null = everywhere).</summary>
+        public byte[] Process(byte[] bgra, int w, int h, byte[] zone = null)
         {
             if (w != width || h != height) CreateTargets(w, h);
+            if (zone == null) { zone = new byte[tilesW * tilesH]; for (int i = 0; i < zone.Length; i++) zone[i] = 255; }
+            UploadZone(zone);
             var td = new TEXTURE2D_DESC { Width = (uint)w, Height = (uint)h, MipLevels = 1, ArraySize = 1, Format = FMT_B8G8R8A8, SampleCount = 1, Usage = USAGE_DEFAULT, BindFlags = BIND_SHADER_RESOURCE };
             IntPtr input, outTex = IntPtr.Zero, outRtv = IntPtr.Zero, staging = IntPtr.Zero;
             fixed (byte* p = bgra) input = Texture(td, p, (uint)(w * 4));

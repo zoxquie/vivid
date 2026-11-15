@@ -390,6 +390,8 @@ namespace Vivid
         public Func<string> TextFn;
         public Func<string> EditTextFn;
         public Action<string> OnCommit;
+        /// <summary>Just the number, right-aligned; a soft pill shows on hover.</summary>
+        public bool Plain;
         public override bool Interactive => true;
         public override Cursor Cursor => Enabled ? Cursors.IBeam : null;
         public override string Tooltip => Enabled ? "Click to type a value" : null;
@@ -401,12 +403,26 @@ namespace Vivid
         }
 
         protected override string CacheKey() =>
-            Ui.Form.IsEditing(Bounds) ? null : RenderCache.Key("vbox", TextFn(), Enabled, Q(HoverT));
+            Ui.Form.IsEditing(Bounds) ? null : RenderCache.Key("vbox", TextFn(), Enabled, Q(HoverT), Plain);
 
         protected override void PaintSelf(Graphics g)
         {
             float h = HoverT;
             bool editing = Ui.Form.IsEditing(Bounds);
+            if (Plain)
+            {
+                float pr = Bounds.Height / 2;
+                if (editing || h > 0)
+                {
+                    Theme.FillRound(g, Bounds, pr, Theme.WithAlpha(Theme.Surface3, (int)(255 * (editing ? 1 : h))));
+                    using (var b = Theme.AccentBrush(Bounds, (int)(editing ? 230 : 110 * h))) Theme.StrokeRound(g, Bounds, pr, b, Math.Max(1, S));
+                }
+                if (editing) return;
+                var tr = new RectangleF(Bounds.X, Bounds.Y, Bounds.Width - 10 * S * h, Bounds.Height);
+                Theme.Txt(g, TextFn(), Theme.F(13.5f, semibold: true), Enabled ? Theme.Mix(Theme.TextMuted, Theme.Text, 0.55f + 0.45f * h) : Theme.TextDim,
+                    h > 0 ? Bounds : tr, h > 0 ? Theme.H.Center : Theme.H.Right);
+                return;
+            }
             float rad = 10 * S;
             Theme.FillRound(g, Bounds, rad, Theme.Mix(Theme.Surface2, Theme.Surface3, h));
             using (var inner = Theme.Gradient(Bounds, Theme.Black(70), Theme.Black(0), 90f))
@@ -431,6 +447,8 @@ namespace Vivid
         public Func<bool> Changed;
         public Action OnClick;
         public Color Tint = Theme.Text;
+        /// <summary>Icon only, and only while the value differs from its default.</summary>
+        public bool Plain;
         public override bool Interactive => true;
         public override string Tooltip => Changed() ? "Reset to default" : null;
         public override void Click() { if (Enabled && Changed()) OnClick?.Invoke(); }
@@ -439,7 +457,7 @@ namespace Vivid
         protected override string CacheKey()
         {
             bool ch = Changed() && Enabled;
-            return RenderCache.Key("reset", Q(Anim.To(this, "lit", ch ? 1 : 0, 12f)), ch ? Q(HoverT) : 0f, Tint);
+            return RenderCache.Key("reset", Q(Anim.To(this, "lit", ch ? 1 : 0, 12f)), ch ? Q(HoverT) : 0f, Tint, Plain);
         }
 
         protected override void PaintSelf(Graphics g)
@@ -448,6 +466,20 @@ namespace Vivid
             float lit = Anim.To(this, "lit", ch ? 1 : 0, 12f);
             float h = ch ? HoverT : 0;
             float rad = 10 * S;
+            if (Plain)
+            {
+                if (lit <= 0.01f) return;
+                if (h > 0) Theme.FillRound(g, Bounds, Bounds.Height / 2, Theme.WithAlpha(Tint, (int)(30 * h * lit)));
+                float ps = 14 * S;
+                float pcx = Bounds.X + Bounds.Width / 2, pcy = Bounds.Y + Bounds.Height / 2;
+                var keep = g.Transform;
+                g.TranslateTransform(pcx, pcy);
+                g.RotateTransform(-60 * h);
+                Icons.Reset(g, new RectangleF(-ps / 2, -ps / 2, ps, ps), Theme.WithAlpha(Theme.Mix(Theme.TextMuted, Tint, 0.5f + 0.5f * h), (int)(255 * lit)));
+                g.Transform = keep;
+                keep.Dispose();
+                return;
+            }
             if (lit > 0) Theme.Glow(g, Bounds, rad, Tint, 5 * S, (int)((18 + 30 * h) * lit));
             Theme.FillRound(g, Bounds, rad, Theme.Mix(Theme.Surface2, Theme.Mix(Theme.Surface2, Tint, 0.10f), lit));
             Theme.StrokeRound(g, Bounds, rad, Theme.Mix(Theme.White(22), Theme.WithAlpha(Tint, 150 + (int)(90 * h)), lit), Math.Max(1, S));
@@ -634,7 +666,9 @@ namespace Vivid
         public override bool Wheel(int delta)
         {
             if (ContentHeight <= Bounds.Height) return false;
-            target = Math.Max(0, Math.Min(MaxOffset, target - Math.Sign(delta) * 70 * S));
+            // proportional, so precision touchpads scroll smoothly and wheels move ~3 lines a notch
+            float step = Math.Max(-3f, Math.Min(3f, delta / 120f)) * 84 * S;
+            target = Math.Max(0, Math.Min(MaxOffset, target - step));
             Ui.Form?.RequestAnimationFrame();
             return true;
         }
@@ -657,7 +691,7 @@ namespace Vivid
         public override void Paint(Graphics g)
         {
             // smooth scrolling
-            float o = Anim.To(this, "scroll", target, 18f);
+            float o = Anim.To(this, "scroll", target, 20f);
             if (Math.Abs(o - Offset) > 0.1f) { Offset = o; Relayout?.Invoke(); }
 
             if (!g.VisibleClipBounds.IntersectsWith(RectangleF.Inflate(Bounds, 32 * S, 32 * S))) return;

@@ -95,6 +95,10 @@ namespace Vivid
         // ---------- dwm ----------
         [DllImport("dwmapi.dll")]
         public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+        /// <summary>Blocks until the desktop compositor shows its next frame (one display refresh).</summary>
+        [DllImport("dwmapi.dll")] public static extern int DwmFlush();
+        [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint ms);
+        [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint ms);
 
         // ---------- kernel32 (NVAPI loading) ----------
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]

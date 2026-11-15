@@ -11,7 +11,7 @@ namespace Vivid
     public static class AppInfo
     {
         /// <summary>Release builds set this from the git tag (v1.3.0 → 1.3.0).</summary>
-        public const string Version = "1.6.0";
+        public const string Version = "1.7.0";
         /// <summary>The name people see. Internally the app is still "Vivid" (assembly name, Vivid.exe
         /// release asset, settings folder, single-instance names) so older copies keep updating.</summary>
         public const string Name = "Fjord Vision";

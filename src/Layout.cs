@@ -43,6 +43,28 @@ namespace Vivid
         readonly ResetButton reset;
         readonly ValueBox value;
         readonly Label note;
+        bool compact;
+
+        /// <summary>Name and value on one line with the slider full width underneath (the main page's look).</summary>
+        public bool Compact
+        {
+            get => compact;
+            set { compact = value; value_Plain(value); H = value ? 60 : 52; }
+        }
+
+        /// <summary>Extra height the panel hands out when it has room to spare (compact rows only).</summary>
+        public float Spare;
+
+        bool HasNote => note != null && !string.IsNullOrEmpty(note.TextFn());
+
+        /// <summary>Compact rows grow a line when a note shows under the slider.</summary>
+        public void UpdateHeight() { if (compact) H = 60 + (HasNote ? 16 : 0) + Spare; }
+
+        void value_Plain(bool on)
+        {
+            value.Plain = on; reset.Plain = on;
+            name.Font = on ? Theme.F(13.5f, semibold: true) : Theme.F(14);
+        }
 
         public SliderRow(string label, double min, double max, double def, double step, Func<double> get, Action<double> set,
             Func<double, string> format, SliderLook look = SliderLook.Neutral, Color? tint = null, Func<bool> enabled = null, Func<string> noteFn = null)
@@ -63,6 +85,18 @@ namespace Vivid
         public override void Layout(RectangleF r)
         {
             Bounds = r;
+            if (compact)
+            {
+                float lh = 26 * S, top = r.Y + (4 + Spare / 2) * S;
+                float vbw = 70 * S, rbw = 26 * S;
+                value.Bounds = new RectangleF(r.Right - vbw, top, vbw, lh);
+                reset.Bounds = new RectangleF(value.Bounds.X - 2 * S - rbw, top, rbw, lh);
+                name.Bounds = new RectangleF(r.X, top, reset.Bounds.X - r.X, lh);
+                // the slider's track is inset 10 px, so widen it to line the track up with the text
+                Slider.Bounds = new RectangleF(r.X - 10 * S, top + lh + 2 * S, r.Width + 20 * S, 26 * S);
+                if (note != null) { note.Visible = HasNote; note.Bounds = new RectangleF(r.X, Slider.Bounds.Bottom - 3 * S, r.Width, 16 * S); }
+                return;
+            }
             float labelW = Math.Min(150 * S, r.Width * 0.28f);
             float vw = 86 * S, bh = 38 * S, rw = 38 * S, gap = 12 * S;
             float cy = r.Y + r.Height / 2;
@@ -168,6 +202,10 @@ namespace Vivid
         public readonly List<Row> Rows = new List<Row>();
         public float HeaderH = 66;
         public Func<string> FooterNote;
+        /// <summary>A small coloured caption and rows, drawn inside a shared panel instead of its own card.</summary>
+        public bool Compact;
+        float Pad => Compact ? 0 : 22;
+        float Head => Compact ? (Caption == null ? 0 : 30) : (Caption == null && Title == null ? 8 : HeaderH);
 
         public Section(string caption, string title, Icons.Drawer icon, Color tint, Action reset = null)
         {
@@ -179,15 +217,16 @@ namespace Vivid
 
         public float MeasureHeight(float width)
         {
-            float h = (Caption == null && Title == null ? 8 : HeaderH) * S;
+            float h = Head * S;
             foreach (var r in Rows)
             {
                 if (!r.Visible) continue;
-                h += r is ControlRow cr ? cr.Measure(width - 44 * S) : r.H * S;
+                (r as SliderRow)?.UpdateHeight();
+                h += r is ControlRow cr ? cr.Measure(width - 2 * Pad * S) : r.H * S;
             }
-            h += 10 * S;
+            h += (Compact ? 2 : 10) * S;
             if (FooterNote != null && !string.IsNullOrEmpty(FooterNote()))
-                h += Theme.Measure(FooterNote(), Theme.F(12.5f), width - 44 * S).Height + 14 * S;
+                h += Theme.Measure(FooterNote(), Theme.F(12.5f), width - 2 * Pad * S).Height + 14 * S;
             return h;
         }
 
@@ -199,12 +238,12 @@ namespace Vivid
                 float w = Theme.Measure("Reset", Theme.F(13, true)).Width + 44 * S;
                 ResetLink.Bounds = new RectangleF(r.Right - 14 * S - w, r.Y + 20 * S, w, 30 * S);
             }
-            float y = r.Y + (Caption == null && Title == null ? 8 : HeaderH) * S;
+            float y = r.Y + Head * S;
             foreach (var row in Rows)
             {
                 if (!row.Visible) continue;
-                float h = row is ControlRow cr ? cr.Measure(r.Width - 44 * S) : row.H * S;
-                row.Layout(new RectangleF(r.X + 22 * S, y, r.Width - 44 * S, h));
+                float h = row is ControlRow cr ? cr.Measure(r.Width - 2 * Pad * S) : row.H * S;
+                row.Layout(new RectangleF(r.X + Pad * S, y, r.Width - 2 * Pad * S, h));
                 y += h;
             }
         }
@@ -224,6 +263,17 @@ namespace Vivid
         void PaintSection(Graphics g, string footer)
         {
             var r = Bounds;
+            if (Compact)
+            {
+                if (Caption == null) return;
+                float d = 6 * S;
+                var dot = new RectangleF(r.X, r.Y + 10 * S, d, d);
+                Theme.RadialGlow(g, new PointF(dot.X + d / 2, dot.Y + d / 2), 16 * S, 16 * S, Tint, 70);
+                using (var b = new SolidBrush(Tint)) g.FillEllipse(b, dot);
+                Theme.Txt(g, Caption.ToUpperInvariant(), Theme.F(10.5f, semibold: true), Theme.WithAlpha(Theme.Mix(Tint, Color.White, 0.35f), 215),
+                    new RectangleF(dot.Right + 9 * S, r.Y + 3 * S, r.Width - 20 * S, 20 * S));
+                return;
+            }
             Theme.Card(g, r, 18);
             if (Caption != null || Title != null)
             {

@@ -12,7 +12,7 @@ Fjord Vision only changes colors at the display level. It never opens, reads or 
 
 1. Download `Fjord-Vision.exe` from the [latest release](https://github.com/zoxquie/vivid/releases/latest) and double-click it. There's nothing to install. It needs 64-bit Windows 10 or 11 (it uses the .NET Framework 4.8 that comes with Windows). Keep it in a folder you own, like Downloads or Documents, so it can update itself.
 2. The exe isn't code-signed, so Windows SmartScreen may say "Windows protected your PC". Click **More info**, then **Run anyway**.
-3. Pick a preset or move the sliders. Changes show in the **Preview** first: **Before** is the picture with no filter, **After** is the preset or edits you're looking at (drag the line to compare). Press **Apply** to put them on screen and save them, or **Discard** to drop them. Turn on **Apply instantly** to skip that step. Hotkeys and the tray menu always apply straight away.
+3. Pick a preset on the left or move the sliders on the right. Changes show in the big preview in the middle first: **Before** is the picture with no filter, **After** is the preset or edits you're looking at (drag the line to compare). Press **Apply** to put them on screen and save them, or **Discard** to drop them. Turn on **Apply instantly** to skip that step. Hotkeys and the tray menu always apply straight away.
 
 Closing the window keeps Fjord Vision running in the tray so your filters stay on. To quit, right-click the tray icon and choose **Quit**. Quitting always puts your screen back to normal.
 
@@ -28,7 +28,10 @@ Closing the window keeps Fjord Vision running in the tray so your filters stay o
   - `Ctrl+F8`: black holo on/off
 
   Each profile can also have its own key. Pressing that key a second time turns filters off, so it's easy to compare with and without filters.
-- **Black holo (Rust):** The **Holo** tab turns the holosight's reticle black wherever it is on screen, in hip fire and when aiming. While Rust is in front, Fjord Vision shows Rust's monitor through your graphics card: Desktop Duplication hands over each finished frame, a pixel shader swaps the reticle's colour (plus its glow and anti-aliased edge), and the result is shown in a click-through window that's left out of screen captures. Every pixel goes through the same shader in the same frame, so the recolour stays on the reticle as it sways and recoils. Large patches of the colour (damage effects, signs) are left alone. Pick the reticle color you use in Rust, what it turns into (black by default), and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode, and Windows 10 version 2004 or newer is needed.
+- **Black holo (Rust):** The **Holo** tab turns just the holosight's reticle black, in hip fire and when aiming. Nothing else on screen changes:
+  - **Only where the holo is.** Aiming down sights, the reticle sits in the middle of the screen, so that circle is always watched. In hip fire it learns where the holo sits on your gun the first time you look around (about half a second of moving the mouse): the reticle stays in the same spot on screen while the world slides past, and anything that moves along with the world is ignored. Red and orange things anywhere else (wood, rust, skin, fire, barrels, signs) stay as they are.
+  - **The whole reticle.** The reticle's own colour (bright and saturated, unlike lit red things in the world), its over-bright white-hot core, and its glow within 3 px all turn black, with a soft 1 px edge.
+  - **How.** While Rust is in front, Desktop Duplication hands over each finished frame, a pixel shader swaps the reticle's colour and the result is shown in a click-through window that's left out of screen captures. Every pixel goes through the shader in the same frame, so the recolour stays on the reticle as it sways and recoils. A 16×16-pixel summary of each frame is read back (without waiting on the GPU) to find where the holo is. Pick the reticle color you use in Rust, what it turns into (black by default), and whether it only runs while Rust is in front. Rust has to be in borderless or windowed mode, and Windows 10 version 2004 or newer is needed.
 - **Automatic updates:** Fjord Vision checks this repository's releases, downloads the new version and swaps it in place, whatever you named the file. A **Restart to update** button appears when it's ready. Turn it off or check by hand in **Settings → Updates**.
 - **On-screen messages:** A short message appears when a hotkey switches something while you're in game.
 - **Tray, start with Windows, start minimized, single instance.**
@@ -80,7 +83,7 @@ sudo apt install dotnet-sdk-8.0 mono-devel
 ./build.sh
 ```
 
-This writes `bin/Vivid.exe`. `tests/run.sh` runs the logic tests: the color matrix math, gamma ramps, settings and profile files, share codes and the holo reticle detection. `tests/gpu/run.sh` builds `bin/GpuSmoke.exe`, which runs the holo shaders on a test picture and compares them with the CPU matcher (run it on Windows, or under Wine with Wine Mono).
+This writes `bin/Vivid.exe`. `tests/run.sh` runs the logic tests: the color matrix math, gamma ramps, settings and profile files, share codes and the holo reticle detection. `tests/gpu/check.sh` runs the holo's real shaders through Direct3D 11 (on Windows, or on Linux under Wine with `wine64`, `g++-mingw-w64-x86-64` and `xvfb`) and checks every pixel against the CPU matcher; screenshots dropped in `tests/gpu/shots` are checked too. `tests/gpu/run.sh` builds `bin/GpuSmoke.exe`, which does the same with the app's own Direct3D code (Windows only).
 
 Code layout:
 
@@ -89,7 +92,7 @@ Code layout:
 | `src/ColorMath.cs` | The filter math: the 5×5 matrix and the gamma curves |
 | `src/ColorEngine.cs` | Applies filters through the matrix, gamma ramp or NVIDIA vibrance, and restores them |
 | `src/NvVibrance.cs` | NVIDIA Digital Vibrance through `nvapi64.dll` |
-| `src/Holo.cs` | The black holo: the overlay window and its thread, plus the CPU matcher used for the preview |
+| `src/Holo.cs` | The black holo: the colour rules, the CPU matcher used for the preview, `HoloZones` (finding where the holo is) and the overlay window and its thread |
 | `src/HoloGpu.cs` | The black holo on the GPU: screen capture, the recolour shaders and the swap chain |
 | `src/Overlays.cs` | The click-through overlay window and the on-screen messages |
 | `src/AppController.cs` | App state, profiles and hotkeys |

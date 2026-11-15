@@ -222,18 +222,19 @@ namespace Vivid
 
     public sealed class FiltersPage : Page
     {
-        Panel leftCard, bar, engineCard, keysCard;
+        // Layout: presets and profiles on the left, the big before/after preview in the middle,
+        // the adjustments on the right and one action bar under the preview and adjustments.
+        Panel leftCard, adjustCard, bar;
         ScrollPanel leftScroll, center;
         Caption lblBuiltIn, lblMine;
-        Label lblPresetsTitle;
         readonly List<ProfileCard> builtInCards = new List<ProfileCard>(), userCards = new List<ProfileCard>();
         Panel emptyBox;
         Section secTone, secColor, secNight;
         LivePreview preview;
         Toggle autoToggle;
         Label autoLabel;
-        Button apply, discard, reset, bindKey, save, importBtn, exportBtn, engineLink, keysLink;
-        int barLevel; // 0 = full labels; higher levels shorten buttons so the bar fits narrow windows
+        Button apply, discard, resetAll, save, importBtn, exportBtn;
+        int barLevel; // 0 = full labels; higher levels shorten things so the bar fits narrow windows
 
         static FilterValues V => Ctl.CurrentValues;
 
@@ -243,67 +244,58 @@ namespace Vivid
             builtInCards.Clear();
             userCards.Clear();
 
-            // ---- left: profiles
+            // ---- left: presets and profiles
             leftCard = Add(new Panel { Painter = (g, r) => Theme.Card(g, r, 20) });
             leftScroll = Add(new ScrollPanel { Relayout = LayoutLeft });
             lblBuiltIn = leftScroll.Add(new Caption("Presets"));
-            lblPresetsTitle = leftScroll.Add(new Label { Text = "Ready presets", Font = Theme.F(16.5f, semibold: true, bold: true) });
             builtInCards.Add(leftScroll.Add(new ProfileCard(AppController.CustomProfile)));
             foreach (var p in Ctl.BuiltIns) builtInCards.Add(leftScroll.Add(new ProfileCard(p)));
             lblMine = leftScroll.Add(new Caption("My profiles"));
             lblMine.TextFn = () => Ctl.UserProfiles.Count == 0 ? "MY PROFILES" : $"MY PROFILES  ·  {Ctl.UserProfiles.Count}";
             foreach (var p in Ctl.UserProfiles) userCards.Add(leftScroll.Add(new ProfileCard(p)));
             emptyBox = leftScroll.Add(new Panel { Painter = PaintEmpty });
-            importBtn = Add(new Button { Text = "Import", Icon = Icons.Import, Style = BtnStyle.Secondary, IconSize = 16, Hint = "Load profiles from a file or a share code" });
+            importBtn = leftScroll.Add(new Button { Icon = Icons.Import, Style = BtnStyle.Ghost, IconSize = 15, Hint = "Import profiles from a file or a share code" });
             importBtn.OnClick = () => Ui.Form.ImportMenu(new PointF(importBtn.Bounds.X, importBtn.Bounds.Bottom + 4 * S));
-            exportBtn = Add(new Button { Text = "Export", Icon = Icons.Export, Style = BtnStyle.Secondary, IconSize = 16, Hint = "Save profiles to a file or copy a share code" });
+            exportBtn = leftScroll.Add(new Button { Icon = Icons.Export, Style = BtnStyle.Ghost, IconSize = 15, Hint = "Export profiles to a file or copy a share code" });
             exportBtn.OnClick = () => Ui.Form.ExportMenu(new PointF(exportBtn.Bounds.X, exportBtn.Bounds.Bottom + 4 * S));
 
-            // ---- centre: filter sections
+            // ---- middle: the preview
+            preview = Add(new LivePreview { Hero = true });
+
+            // ---- right: adjustments in one panel
+            adjustCard = Add(new Panel { Painter = PaintAdjust });
+            resetAll = Add(new Button
+            {
+                Text = "Reset all", Icon = Icons.Reset, IconSize = 13, Style = BtnStyle.Link, Hint = "Set every slider back to neutral",
+                EnabledWhen = () => !V.IsNeutral,
+                OnClick = () => Ctl.ResetValues((FilterParam[])Enum.GetValues(typeof(FilterParam)))
+            });
             center = Add(new ScrollPanel { Relayout = LayoutCenter });
 
-            secTone = center.Add(new Section("Image", "Light and tone", Icons.Sun, Theme.Amber, () => Ctl.ResetValues(FilterParam.Brightness, FilterParam.Contrast)));
+            secTone = center.Add(new Section("Light and tone", null, null, Theme.Amber) { Compact = true });
             secTone.AddRow(MakeRow(FilterParam.Brightness, SliderLook.Neutral, Theme.Amber));
             secTone.AddRow(MakeRow(FilterParam.Contrast, SliderLook.Neutral, Theme.Amber));
 
-            secColor = center.Add(new Section("Palette", "Color", Icons.Drop, Theme.Green, () => Ctl.ResetValues(FilterParam.Saturation, FilterParam.Hue)));
+            secColor = center.Add(new Section("Color", null, null, Theme.Green) { Compact = true });
             secColor.AddRow(MakeRow(FilterParam.Saturation, SliderLook.Green, Theme.Green,
                 note: () => Ctl.Settings.Engine == EngineMode.GammaRamp ? (Ctl.Settings.UseNvVibrance ? "via NVIDIA vibrance" : "needs Screen matrix") : null));
             secColor.AddRow(MakeRow(FilterParam.Hue, SliderLook.Rainbow, Theme.Green,
                 enabled: () => Ctl.Settings.Engine == EngineMode.ScreenMatrix,
-                note: () => Ctl.Settings.Engine == EngineMode.GammaRamp ? "Screen matrix mode only" : null));
+                note: () => Ctl.Settings.Engine == EngineMode.GammaRamp ? "Screen matrix only" : null));
 
-            secNight = center.Add(new Section("Visibility", "Night vision", Icons.Moon, Theme.Blue, () => Ctl.ResetValues(FilterParam.NightVision)));
+            secNight = center.Add(new Section("Night vision", null, null, Theme.Blue) { Compact = true });
             secNight.AddRow(MakeRow(FilterParam.NightVision, SliderLook.Accent, Theme.Blue));
-            secNight.FooterNote = () => Scene.PreviewHasPictures(Ctl.Find("builtin.summer"))
-                ? "Lifts dark areas without washing out highlights. Hover Night Vision to try it on a night scene."
-                : "Lifts dark areas without washing out highlights. Try it on the cave in the preview.";
-
-            // ---- right column
-            preview = Add(new LivePreview());
-            engineCard = Add(new Panel { Painter = PaintEngine });
-            engineLink = Add(new Button { Text = "Settings", Style = BtnStyle.Link, OnClick = () => Ui.Form.ShowPage(PageId.Settings) });
-            keysCard = Add(new Panel { Painter = PaintKeys });
-            keysLink = Add(new Button { Text = "Edit", Style = BtnStyle.Link, OnClick = () => Ui.Form.ShowPage(PageId.Settings) });
 
             // ---- bottom bar
             bar = Add(new Panel { Painter = PaintBar });
             autoToggle = Add(new Toggle { Get = () => Ctl.Settings.AutoApply, Set = v => Ctl.SetAutoApply(v) });
-            autoLabel = Add(new Label { Text = "Apply instantly", Font = Theme.F(14) });
+            autoLabel = Add(new Label { Text = "Apply instantly", Font = Theme.F(13.5f), Color = Theme.TextMuted });
             autoToggle.Hint = "Off: changes wait in the preview until you press Apply";
             apply = Add(new Button { Text = "Apply", Style = BtnStyle.Primary, EnabledWhen = () => Ctl.PendingChanges, Hint = "Put the preview on your screen", OnClick = () => Ctl.Commit() });
-            discard = Add(new Button { Text = "Discard", Style = BtnStyle.Secondary, Hint = "Throw away changes that aren't applied", OnClick = () => Ctl.Discard() });
-            reset = Add(new Button { TextFn = () => barLevel >= 1 ? "" : "Reset", Icon = Icons.Reset, IconSize = 15, Style = BtnStyle.Secondary, Hint = "Set every slider back to neutral", OnClick = () => Ctl.ResetValues((FilterParam[])Enum.GetValues(typeof(FilterParam))) });
-            bindKey = Add(new Button
-            {
-                TextFn = () => Ctl.KeyFor(Ctl.EditSelected)?.ToString() ?? (barLevel >= 1 ? "" : "Bind key"),
-                Icon = Icons.Keyboard, Style = BtnStyle.Secondary, IconSize = 17,
-                Hint = "Choose a key that switches to this profile while you play",
-                OnClick = () => { var p = Ctl.EditSelected; Ui.Form.BindKeyDialog("Key for " + p.Name, () => Ctl.KeyFor(p), k => Ctl.SetProfileKey(p, k)); }
-            });
+            discard = Add(new Button { Text = "Discard", Style = BtnStyle.Ghost, Hint = "Throw away changes that aren't applied", OnClick = () => Ctl.Discard() });
             save = Add(new Button
             {
-                TextFn = () => barLevel >= 2 ? "Save" : "Save as profile", Icon = Icons.Plus, Style = BtnStyle.Primary, IconSize = 16, Hint = "Save these values as a profile",
+                TextFn = () => barLevel >= 2 ? "Save" : "Save as profile", Icon = Icons.Plus, Style = BtnStyle.Secondary, IconSize = 15, Hint = "Save these values as a profile",
                 OnClick = () => Ui.Form.Prompt("Save as profile", "Saves the slider values to My profiles and applies them.", SuggestName(), "Save", n => { Ctl.SaveAsProfile(n); Ui.Form.ShowToast("Profile saved"); })
             });
         }
@@ -318,7 +310,7 @@ namespace Vivid
         {
             var spec = ParamSpec.Of(param);
             return new SliderRow(spec.Name, spec.Min, spec.Max, spec.Default, spec.Step,
-                () => V.Get(param), v => Ctl.SetValue(param, v), spec.Format, look, tint, enabled, note);
+                () => V.Get(param), v => Ctl.SetValue(param, v), spec.Format, look, tint, enabled, note) { Compact = true };
         }
 
         public override void Layout(RectangleF area)
@@ -327,60 +319,47 @@ namespace Vivid
             float gap = 16 * S;
             float top = area.Y + HeaderH * S;
             float bodyH = area.Bottom - top;
-            float leftW = 256 * S;
-            float rightW = Math.Max(280 * S, Math.Min(390 * S, area.Width * 0.28f));
-            float barH = 66 * S;
+            float leftW = Math.Max(214 * S, Math.Min(258 * S, area.Width * 0.2f));
+            float rightW = Math.Max(300 * S, Math.Min(372 * S, area.Width * 0.29f));
+            float barH = 62 * S;
 
             leftCard.Bounds = new RectangleF(area.X, top, leftW, bodyH);
-            float ieH = 40 * S;
-            var ieRow = new RectangleF(leftCard.Bounds.X + 12 * S, leftCard.Bounds.Bottom - 12 * S - ieH, leftW - 24 * S, ieH);
-            importBtn.Bounds = new RectangleF(ieRow.X, ieRow.Y, (ieRow.Width - 8 * S) / 2, ieH);
-            exportBtn.Bounds = new RectangleF(importBtn.Bounds.Right + 8 * S, ieRow.Y, (ieRow.Width - 8 * S) / 2, ieH);
-            leftScroll.Bounds = new RectangleF(leftCard.Bounds.X + 12 * S, leftCard.Bounds.Y + 12 * S, leftW - 24 * S, ieRow.Y - 12 * S - (leftCard.Bounds.Y + 12 * S));
+            leftScroll.Bounds = RectangleF.Inflate(leftCard.Bounds, -12 * S, -12 * S);
             LayoutLeft();
 
-            float cx = area.X + leftW + gap;
-            float cw = area.Right - cx - rightW - gap;
+            float cx = leftCard.Bounds.Right + gap;
             float barY = area.Bottom - barH;
             bar.Bounds = new RectangleF(cx, barY, area.Right - cx, barH);
-            center.Bounds = new RectangleF(cx, top, cw, barY - gap - top);
+            float bodyBottom = barY - gap;
+
+            float rx = area.Right - rightW;
+            preview.Bounds = new RectangleF(cx, top, rx - gap - cx, bodyBottom - top);
+            preview.Visible = preview.Bounds.Width > 160 * S && preview.Bounds.Height > 120 * S;
+
+            adjustCard.Bounds = new RectangleF(rx, top, rightW, bodyBottom - top);
+            float lw = Theme.Measure("Reset all", Theme.F(13, true)).Width + 34 * S;
+            resetAll.Bounds = new RectangleF(adjustCard.Bounds.Right - 12 * S - lw, top + 13 * S, lw, 28 * S);
+            center.Bounds = new RectangleF(rx + 20 * S, top + 54 * S, rightW - 40 * S, adjustCard.Bounds.Bottom - 10 * S - (top + 54 * S));
             LayoutCenter();
             LayoutBar();
-
-            // right column: preview, engine status, hotkeys (each only if it fits)
-            float rx = cx + cw + gap, ry = top, limit = barY - gap;
-            float ph = Math.Min(LivePreview.HeightFor(rightW), limit - ry);
-            preview.Bounds = new RectangleF(rx, ry, rightW, ph);
-            preview.Visible = ph > 140 * S;
-            ry = preview.Visible ? preview.Bounds.Bottom + 12 * S : ry;
-
-            float engH = EngineCardHeight(rightW);
-            engineCard.Bounds = new RectangleF(rx, ry, rightW, engH);
-            engineCard.Visible = engineLink.Visible = ry + engH <= limit;
-            float lw = Theme.Measure("Settings", Theme.F(13, true)).Width + 16 * S;
-            engineLink.Bounds = new RectangleF(engineCard.Bounds.Right - 12 * S - lw, ry + 14 * S, lw, 28 * S);
-            if (engineCard.Visible) ry += engH + 12 * S;
-
-            float keysH = KeysCardHeight();
-            keysCard.Bounds = new RectangleF(rx, ry, rightW, Math.Max(keysH, limit - ry));
-            keysCard.Visible = keysLink.Visible = ry + keysH <= limit;
-            float kl = Theme.Measure("Edit", Theme.F(13, true)).Width + 16 * S;
-            keysLink.Bounds = new RectangleF(keysCard.Bounds.Right - 12 * S - kl, ry + 14 * S, kl, 28 * S);
         }
 
         void LayoutLeft()
         {
             var r = leftScroll.Bounds;
-            float ch = 56 * S, cg = 8 * S;
-            float content = 4 * S + 54 * S + builtInCards.Count * (ch + cg) + 14 * S + 28 * S
+            float ch = 58 * S, cg = 8 * S;
+            float content = 6 * S + 26 * S + builtInCards.Count * (ch + cg) + 16 * S + 30 * S
                 + (userCards.Count == 0 ? 116 * S : userCards.Count * (ch + cg)) + 8 * S;
             float w = content > r.Height + 1 ? r.Width - 10 * S : r.Width;
-            float y = r.Y + 4 * S - leftScroll.Offset;
-            lblBuiltIn.Bounds = new RectangleF(r.X + 4 * S, y, w, 20 * S); y += 20 * S;
-            lblPresetsTitle.Bounds = new RectangleF(r.X + 4 * S, y, w, 26 * S); y += 34 * S;
+            float y = r.Y + 6 * S - leftScroll.Offset;
+            lblBuiltIn.Bounds = new RectangleF(r.X + 6 * S, y, w, 20 * S); y += 26 * S;
             foreach (var c in builtInCards) { c.Bounds = new RectangleF(r.X, y, w, ch); c.Clip = r; c.Layout(c.Bounds); y += ch + cg; }
-            y += 14 * S;
-            lblMine.Bounds = new RectangleF(r.X + 4 * S, y, w, 22 * S); y += 28 * S;
+            y += 16 * S;
+            lblMine.Bounds = new RectangleF(r.X + 6 * S, y + 2 * S, w - 64 * S, 22 * S);
+            float ib = 26 * S;
+            exportBtn.Bounds = new RectangleF(r.X + w - ib, y, ib, ib);
+            importBtn.Bounds = new RectangleF(exportBtn.Bounds.X - 4 * S - ib, y, ib, ib);
+            y += 30 * S;
             foreach (var c in userCards) { c.Bounds = new RectangleF(r.X, y, w, ch); c.Clip = r; c.Layout(c.Bounds); y += ch + cg; }
             emptyBox.Visible = userCards.Count == 0;
             if (emptyBox.Visible) { emptyBox.Bounds = new RectangleF(r.X, y, w, 116 * S); y += 116 * S; }
@@ -392,9 +371,20 @@ namespace Vivid
         {
             var r = center.Bounds;
             float y = r.Y - center.Offset;
-            float gap = 14 * S;
+            float gap = 12 * S;
             var secs = new[] { secTone, secColor, secNight };
+            var rows = secs.SelectMany(x => x.Rows).OfType<SliderRow>().ToList();
+            foreach (var row in rows) row.Spare = 0;
             float total = secs.Sum(x => x.MeasureHeight(r.Width)) + gap * (secs.Length - 1);
+            if (total < r.Height - 2 * S)
+            {
+                // room to spare: give the rows a little air (up to 12 px each), then the gaps between groups
+                float extra = r.Height - 2 * S - total;
+                float perRow = Math.Min(10f, extra / S * 0.75f / Math.Max(1, rows.Count));
+                foreach (var row in rows) row.Spare = perRow;
+                gap += Math.Min(8 * S, Math.Max(0, extra - perRow * S * rows.Count) / (secs.Length - 1));
+                total = secs.Sum(x => x.MeasureHeight(r.Width)) + gap * (secs.Length - 1);
+            }
             float w = total > r.Height + 1 ? r.Width - 12 * S : r.Width; // leave room for the scrollbar
             foreach (var s in secs)
             {
@@ -421,59 +411,59 @@ namespace Vivid
         {
             var r = bar.Bounds;
             float cy = r.Y + r.Height / 2;
-            float bh = 42 * S, gap = 10 * S;
+            float bh = 40 * S, gap = 8 * S;
             var bf = Theme.F(13.5f, true);
-            float x = r.Right - 12 * S;
-            float sw = Theme.Measure(barLevel >= 2 ? "Save" : "Save as profile", bf).Width + 56 * S;
-            save.Bounds = new RectangleF(x - sw, cy - bh / 2, sw, bh); x = save.Bounds.X - gap;
-            string kt = Ctl.KeyFor(Ctl.EditSelected)?.ToString() ?? (barLevel >= 1 ? "" : "Bind key");
-            float kw = kt == "" ? 46 * S : Math.Max(barLevel >= 1 ? 46 * S : 120 * S, Theme.Measure(kt, bf).Width + 58 * S);
-            bindKey.Bounds = new RectangleF(x - kw, cy - bh / 2, kw, bh); x = bindKey.Bounds.X - gap;
-            float rw = barLevel >= 1 ? 46 * S : Theme.Measure("Reset", bf).Width + 52 * S;
-            reset.Bounds = new RectangleF(x - rw, cy - bh / 2, rw, bh); x = reset.Bounds.X - gap;
+            float x = r.Right - 11 * S;
             apply.Visible = !Ctl.Settings.AutoApply;
-            if (apply.Visible) { float aw = barLevel >= 3 ? 76 * S : 92 * S; apply.Bounds = new RectangleF(x - aw, cy - bh / 2, aw, bh); x = apply.Bounds.X - gap; }
+            if (apply.Visible)
+            {
+                float aw = Math.Max(barLevel >= 3 ? 76 * S : 100 * S, Theme.Measure("Apply", bf).Width + 40 * S);
+                apply.Bounds = new RectangleF(x - aw, cy - bh / 2, aw, bh); x = apply.Bounds.X - gap;
+            }
+            float sw = Theme.Measure(barLevel >= 2 ? "Save" : "Save as profile", bf).Width + 54 * S;
+            save.Bounds = new RectangleF(x - sw, cy - bh / 2, sw, bh); x = save.Bounds.X - gap;
             discard.Visible = Ctl.PendingChanges;
             if (discard.Visible)
             {
-                float dw = Theme.Measure("Discard", bf).Width + (barLevel >= 3 ? 24 : 36) * S;
+                float dw = Theme.Measure("Discard", bf).Width + (barLevel >= 3 ? 22 : 34) * S;
                 discard.Bounds = new RectangleF(x - dw, cy - bh / 2, dw, bh); x = discard.Bounds.X - gap;
             }
-            x -= 8 * S; // separator
+            x -= 10 * S; // separator
             autoLabel.Visible = barLevel < 3; // the switch keeps its tooltip
-            float lw = autoLabel.Visible ? Theme.Measure("Apply instantly", Theme.F(14)).Width + 4 * S : 0;
-            autoLabel.Bounds = new RectangleF(x - 8 * S - lw, r.Y, lw, r.Height);
-            autoToggle.Bounds = new RectangleF(autoLabel.Bounds.X - (lw > 0 ? 10 * S : 0) - 44 * S, cy - 13 * S, 44 * S, 26 * S);
+            float lw = autoLabel.Visible ? Theme.Measure("Apply instantly", autoLabel.Font).Width + 4 * S : 0;
+            autoLabel.Bounds = new RectangleF(x - 10 * S - lw, r.Y, lw, r.Height);
+            autoToggle.Bounds = new RectangleF(autoLabel.Bounds.X - (lw > 0 ? 10 * S : 0) - 42 * S, cy - 12 * S, 42 * S, 24 * S);
         }
-
-        float EngineCardHeight(float w)
-        {
-            float h = 80 * S;
-            h += Theme.Measure(Ctl.Engine.StatusDetail ?? "", Theme.F(12.5f), w - 40 * S).Height + 16 * S;
-            return h;
-        }
-
-        float KeysCardHeight() => (56 + 3 * 36 + 10) * S + (Ctl.HotkeyFailures.Count > 0 ? 40 * S : 0);
 
         public override void Paint(Graphics g)
         {
-            // Re-run layout: card heights and button widths depend on live text (status, key names).
+            // Re-run layout: button widths depend on live text (status, pending changes).
             Layout(Area);
             PaintHeader(g, "Screen filters", Ctl.Settings.AutoApply
-                ? "Color and visibility over your whole screen. Changes go on screen as you make them."
-                : "Color and visibility over your whole screen. Changes show in the preview first, then Apply puts them on screen.");
+                ? "Color and visibility for your whole screen. Changes go on screen as you make them."
+                : "Color and visibility for your whole screen. Try changes in the preview, then Apply.");
             base.Paint(g);
+        }
+
+        void PaintAdjust(Graphics g, RectangleF r)
+        {
+            RenderCache.Draw(g, RenderCache.Key("adjust", r.Width, r.Height), RectangleF.Inflate(r, 1, 1), gg =>
+            {
+                Theme.Card(gg, r, 20);
+                Theme.Txt(gg, "Adjust", Theme.F(16, semibold: true), Theme.Text, new RectangleF(r.X + 20 * S, r.Y + 13 * S, r.Width / 2, 28 * S));
+                Theme.Divider(gg, r.X + 20 * S, r.Right - 20 * S, r.Y + 50 * S, 18);
+            });
         }
 
         void PaintEmpty(Graphics g, RectangleF r)
         {
-            Theme.FillRound(g, r, 14 * S, Theme.White(5));
-            using (var p = new Pen(Theme.WithAlpha(Theme.Accent, 110), Math.Max(1, S)) { DashPattern = new[] { 4f, 3f } })
+            Theme.FillRound(g, r, 14 * S, Theme.White(4));
+            using (var p = new Pen(Theme.WithAlpha(Theme.Accent, 90), Math.Max(1, S)) { DashPattern = new[] { 4f, 3f } })
             using (var path = Theme.Round(RectangleF.Inflate(r, -0.5f, -0.5f), 14 * S))
                 g.DrawPath(p, path);
             float d = 30 * S;
             var ic = new RectangleF(r.X + (r.Width - d) / 2, r.Y + 16 * S, d, d);
-            Theme.RadialGlow(g, new PointF(ic.X + d / 2, ic.Y + d / 2), d, d, Theme.AccentMid, 80);
+            Theme.RadialGlow(g, new PointF(ic.X + d / 2, ic.Y + d / 2), d, d, Theme.AccentMid, 70);
             using (var b = Theme.AccentBrush(ic, 60)) g.FillEllipse(b, ic);
             Icons.Plus(g, RectangleF.Inflate(ic, -7 * S, -7 * S), Color.White);
             Theme.Txt(g, "No saved profiles", Theme.F(13.5f, semibold: true), Theme.Text, new RectangleF(r.X, r.Y + 52 * S, r.Width, 20 * S), Theme.H.Center);
@@ -484,67 +474,21 @@ namespace Vivid
         void PaintBar(Graphics g, RectangleF r)
         {
             Theme.Card(g, r, 18);
-            float x = r.X + 22 * S;
-            Theme.Txt(g, "STATUS", Theme.F(10.5f, semibold: true), Theme.TextDim, new RectangleF(x, r.Y + 12 * S, 200 * S, 16 * S));
+            float x = r.X + 20 * S;
             var c = Ctl.StatusColor;
-            Theme.PulseDot(g, new PointF(x + 4 * S, r.Y + 41 * S), 8 * S, c, Ctl.Settings.FiltersOn && !Ctl.PendingChanges);
-            if (Ctl.PendingChanges) Theme.Txt(g, "NOT APPLIED", Theme.F(10.5f, semibold: true), Theme.Amber, new RectangleF(x + 60 * S, r.Y + 12 * S, 200 * S, 16 * S));
-            float maxW = autoToggle.Bounds.X - 16 * S - (x + 22 * S);
-            Theme.Txt(g, Ctl.StatusLine, Theme.F(14, semibold: true), Theme.Text, new RectangleF(x + 22 * S, r.Y + 29 * S, Math.Max(20, maxW), 24 * S));
-            float sx = autoLabel.Bounds.Right + 16 * S;
-            using (var p = new Pen(Theme.White(22), Math.Max(1, S))) g.DrawLine(p, sx, r.Y + 18 * S, sx, r.Bottom - 18 * S);
-        }
-
-        void PaintEngine(Graphics g, RectangleF r)
-        {
+            float cy = r.Y + r.Height / 2;
+            Theme.PulseDot(g, new PointF(x + 4 * S, cy), 8 * S, c, Ctl.Settings.FiltersOn && !Ctl.PendingChanges);
+            float maxW = autoToggle.Bounds.X - 16 * S - (x + 20 * S);
+            string line = Ctl.StatusLine;
             var eng = Ctl.Engine;
-            Color c = eng.Health == EngineHealth.Error ? Theme.Red : eng.Health == EngineHealth.Warning ? Theme.Amber : eng.Health == EngineHealth.Off ? Theme.TextMuted : Theme.Green;
-            Theme.Card(g, r, 18);
-            var st = g.Save();
-            using (var clip = Theme.Round(r, 18 * S)) g.SetClip(clip, CombineMode.Intersect);
-            Theme.RadialGlow(g, new PointF(r.X + 36 * S, r.Y + 34 * S), 160 * S, 80 * S, c, 30);
-            g.Restore(st);
-            var tile = new RectangleF(r.X + 18 * S, r.Y + 16 * S, 38 * S, 38 * S);
-            Theme.Glow(g, tile, 11 * S, c, 6 * S, 30);
-            using (var b = Theme.Gradient(tile, Theme.Mix(Theme.Surface3, c, 0.22f), Theme.Mix(Theme.Surface2, c, 0.05f), 90f)) Theme.FillRound(g, tile, 11 * S, b);
-            Theme.StrokeRound(g, tile, 11 * S, Theme.WithAlpha(c, 140), Math.Max(1, S));
-            Icons.Bolt(g, RectangleF.Inflate(tile, -10 * S, -10 * S), c);
-            string mode = Ctl.Settings.Engine == EngineMode.ScreenMatrix ? "SCREEN MATRIX" : "GAMMA RAMP";
-            Theme.Txt(g, mode, Theme.F(10.5f, semibold: true), Theme.WithAlpha(c, 210), new RectangleF(tile.Right + 12 * S, tile.Y, engineLink.Bounds.X - tile.Right - 16 * S, 16 * S));
-            Theme.Txt(g, eng.StatusTitle, Theme.F(15, semibold: true), Theme.Text, new RectangleF(tile.Right + 12 * S, tile.Y + 14 * S, r.Right - tile.Right - 30 * S, 24 * S));
-            Theme.Txt(g, eng.StatusDetail, Theme.F(12.5f), Theme.TextMuted, new RectangleF(r.X + 20 * S, tile.Bottom + 12 * S, r.Width - 40 * S, r.Bottom - tile.Bottom - 16 * S), Theme.H.Left, false, true);
-        }
-
-        void PaintKeys(Graphics g, RectangleF r)
-        {
-            Theme.Card(g, r, 18);
-            Theme.Txt(g, "Hotkeys", Theme.F(15, semibold: true), Theme.Text, new RectangleF(r.X + 20 * S, r.Y + 14 * S, r.Width - 100 * S, 28 * S));
-            var s = Ctl.Settings;
-            var rows = new[] { ("Filters on / off", s.ToggleFiltersKey), ("Next profile", s.NextProfileKey), ("Black holo", s.ToggleHoloKey) };
-            float y = r.Y + 54 * S;
-            var kf = Theme.F(12, semibold: true);
-            foreach (var (label, key) in rows)
-            {
-                Theme.Txt(g, label, Theme.F(13), Theme.TextMuted, new RectangleF(r.X + 20 * S, y, r.Width / 2, 28 * S));
-                if (key.IsEmpty)
-                    Theme.Txt(g, "Not set", Theme.F(12.5f), Theme.TextDim, new RectangleF(r.X, y, r.Width - 20 * S, 28 * S), Theme.H.Right);
-                else
-                {
-                    float xr = r.Right - 20 * S;
-                    var parts = key.ToString().Split('+');
-                    for (int i = parts.Length - 1; i >= 0; i--)
-                    {
-                        float w = Math.Max(28 * S, Theme.Measure(parts[i], kf).Width + 14 * S);
-                        Theme.KeyCap(g, new RectangleF(xr - w, y + 1 * S, w, 26 * S), parts[i], kf);
-                        xr -= w + 4 * S;
-                    }
-                }
-                y += 36 * S;
-            }
-            var fails = Ctl.HotkeyFailures;
-            if (fails.Count > 0)
-                Theme.Txt(g, "In use by another app: " + string.Join(", ", fails), Theme.F(12), Theme.Amber,
-                    new RectangleF(r.X + 20 * S, y + 2 * S, r.Width - 40 * S, 34 * S), Theme.H.Left, false, true);
+            bool engIssue = Ctl.Settings.FiltersOn && !Ctl.PendingChanges && (eng.Health == EngineHealth.Error || eng.Health == EngineHealth.Warning);
+            var lf = Theme.F(14, semibold: true);
+            float tw = Math.Min(Math.Max(20, maxW), Theme.Measure(line, lf).Width + 2 * S);
+            Theme.Txt(g, line, lf, Theme.Text, new RectangleF(x + 20 * S, r.Y, tw, r.Height));
+            if (engIssue && maxW - tw > 60 * S)
+                Theme.Txt(g, "·  " + eng.StatusTitle, Theme.F(13), c, new RectangleF(x + 20 * S + tw + 6 * S, r.Y, maxW - tw - 6 * S, r.Height));
+            float sx = autoLabel.Visible ? autoLabel.Bounds.Right + 14 * S : autoToggle.Bounds.Right + 14 * S;
+            using (var p = new Pen(Theme.White(20), Math.Max(1, S))) g.DrawLine(p, sx, r.Y + 17 * S, sx, r.Bottom - 17 * S);
         }
     }
 
@@ -558,11 +502,12 @@ namespace Vivid
         Bitmap before, after;
         string key;
         readonly HoloMatcher matcher = new HoloMatcher();
+        readonly HoloZones zones = new HoloZones();
         static AppController Ctl => Ui.Form.Ctl;
 
         public override bool Interactive => true;
         public override Cursor Cursor => Cursors.SizeWE;
-        public override string Tooltip => dragging ? null : "Before: the holo as Rust draws it. After: what " + AppInfo.Name + " turns it into. Drag to compare.";
+        public override string Tooltip => dragging ? null : "Before: the holo as Rust draws it. After: what " + AppInfo.Name + " turns it into. The marker on the right has the same colour and stays as it is. Drag to compare.";
         public override void MouseDown(PointF p, MouseButtons b) { if (b == MouseButtons.Left) { dragging = true; Move(p); } }
         public override void MouseDrag(PointF p) { if (dragging) Move(p); }
         public override void MouseUp(PointF p, bool inside, MouseButtons b) { dragging = false; }
@@ -587,17 +532,24 @@ namespace Vivid
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 Scene.DrawCover(g, picture, new RectangleF(0, 0, w, h), 0.5f);
                 using (var dim = new SolidBrush(Color.FromArgb(70, 0, 0, 0))) g.FillRectangle(dim, 0, 0, w, h);
+                var col = Color.FromArgb(hs.Target);
+                // something else in the world with the same colour (a painted marker): it must stay as it is
+                var mk = new RectangleF(w * 0.84f, h * 0.6f, Math.Max(12, w * 0.07f), Math.Max(18, h * 0.12f));
+                using (var post = new SolidBrush(Color.FromArgb(255, 58, 50, 44))) g.FillRectangle(post, mk.X + mk.Width * 0.42f, mk.Bottom, mk.Width * 0.16f, h * 0.2f);
+                using (var paint = new SolidBrush(col)) using (var path = Theme.Round(mk, 3)) g.FillPath(paint, path);
+                using (var band = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillRectangle(band, mk.X, mk.Y + mk.Height * 0.45f, mk.Width, mk.Height * 0.12f);
                 // a holosight seen from behind: dark frame, tinted glass, glowing ring and dot
-                float cx = w / 2f, cy = h / 2f, R = Math.Min(w, h) * 0.11f;
+                float cx = w / 2f, cy = h / 2f, R = Math.Min(w, h) * 0.08f;
                 var glass = new RectangleF(cx - R * 2.6f, cy - R * 2.0f, R * 5.2f, R * 4.0f);
                 using (var frame = new Pen(Color.FromArgb(235, 28, 30, 32), R * 0.45f)) using (var path = Theme.Round(glass, R * 0.5f)) g.DrawPath(frame, path);
                 using (var tint = new SolidBrush(Color.FromArgb(40, 120, 200, 200))) using (var path = Theme.Round(glass, R * 0.5f)) g.FillPath(tint, path);
-                var col = Color.FromArgb(hs.Target);
                 for (int i = 4; i >= 1; i--)
                     using (var glow = new Pen(Color.FromArgb(28, col), R * 0.08f + i * R * 0.07f)) g.DrawEllipse(glow, cx - R, cy - R, 2 * R, 2 * R);
                 using (var ring = new Pen(col, Math.Max(2f, R * 0.09f))) g.DrawEllipse(ring, cx - R, cy - R, 2 * R, 2 * R);
                 float d = Math.Max(3f, R * 0.16f);
                 using (var b = new SolidBrush(col)) g.FillEllipse(b, cx - d / 2, cy - d / 2, d, d);
+                // the over-bright middle of the dot
+                using (var hot = new SolidBrush(Color.FromArgb(235, 255, 236, 230))) g.FillEllipse(hot, cx - d * 0.22f, cy - d * 0.22f, d * 0.44f, d * 0.44f);
             }
 
             // run the real matcher over it, then lay its output on top
@@ -610,6 +562,9 @@ namespace Vivid
             {
                 matcher.Resize(w, h);
                 matcher.Configure(hs);
+                // the same zones the live holo starts with: the aiming circle in the middle
+                zones.Resize(matcher.TilesW, matcher.TilesH, w, h);
+                matcher.Zone = zones.Zone;
                 fixed (byte* op = overlay) matcher.Process((byte*)src.Scan0, op, Color.FromArgb(hs.Output));
                 byte* dp = (byte*)dst.Scan0;
                 for (int i = 0; i < w * h; i++)
@@ -696,7 +651,7 @@ namespace Vivid
 
             secMain = right.Add(new Section("Rust", "Black holo", Icons.Crosshair, Theme.Accent, null));
             secMain.AddRow(new ControlRow("Black holo",
-                () => "Turns the holosight's reticle black wherever it is on screen, in hip fire and when aiming. Rust has to run in borderless or windowed mode.",
+                () => "Turns just the holosight's reticle black, in hip fire and when aiming. Nothing else on screen changes. Rust has to run in borderless or windowed mode.",
                 new Toggle { Get = () => H.Enabled, Set = v => Ctl.SetHoloEnabled(v) }, 44, 26));
             secMain.AddRow(new ControlRow("Only while Rust is in front",
                 () => "Pauses whenever another window is in front, so nothing else on your screen changes.",
@@ -707,14 +662,14 @@ namespace Vivid
             for (int i = 1; i < n; i++) opts[i] = "Display " + (i + 1);
             var disp = secMain.AddRow(new WideRow("Display when Rust isn't in front", new Segmented { Options = opts, Get = () => Math.Min(H.Display, opts.Length - 1), Set = i => { H.Display = i; Ctl.HoloChanged(); } }, 120 * n));
             disp.Visible = n > 1;
-            secMain.FooterNote = () => "While it's on, you see Rust through " + AppInfo.Name + ": every frame is copied, the reticle's colour is swapped on your graphics card and the result is shown on top, about a frame behind the game. It never touches Rust's files or memory.";
+            secMain.FooterNote = () => "How it finds the holo: aiming down sights, the reticle sits in the middle of your screen, so that spot is always watched. In hip fire it learns where the holo sits on your gun the first time you look around (about half a second of moving the mouse). Only those spots are recoloured, so red and orange things anywhere else stay as they are. It works from a copy of the picture on your graphics card and never touches Rust's files or memory.";
 
             secColor = right.Add(new Section("Colours", "Reticle colour", Icons.Drop, Theme.Green, null));
             secColor.AddRow(new WideRow("Reticle in Rust", Swatches(Reticles, () => H.Target, v => H.Target = v)));
             secColor.AddRow(new WideRow("Turns into", Swatches(Outputs, () => H.Output, v => H.Output = v)));
             secColor.AddRow(new SliderRow("Tolerance", 0, 100, 45, 1, () => H.Tolerance, v => { H.Tolerance = (int)Math.Round(v); Ctl.HoloChanged(); },
                 v => (int)v + "%", SliderLook.Neutral, Theme.Text));
-            secColor.FooterNote = () => "Anything on screen with exactly the reticle's colour turns black too. If red things you care about change, set the holosight to an unusual colour in Rust's accessibility settings (like magenta) and pick the same one here. Raise Tolerance if parts of the glow stay coloured, lower it if other things turn black.";
+            secColor.FooterNote = () => "Pick the colour your holosight has in Rust. Raise Tolerance if parts of the reticle stay coloured, lower it if things right next to the reticle change.";
 
             bar = Add(new Panel { Painter = PaintBar });
             onToggle = Add(new Toggle { Get = () => H.Enabled, Set = v => Ctl.SetHoloEnabled(v) });
@@ -816,7 +771,11 @@ namespace Vivid
             if (!H.Enabled) { text = "Off"; c = Theme.TextDim; }
             else if (st == HoloOverlay.RunState.Unsupported) { text = !Native.IsWindows ? "Only works on Windows" : o.Problem ?? "Stopped: something went wrong (see error.log)"; c = Theme.Red; }
             else if (st == HoloOverlay.RunState.WaitingForRust) { text = "On · waiting for Rust to be in front"; c = Theme.Amber; }
-            else if (st == HoloOverlay.RunState.Running) { text = "Working · " + o.Fps + " fps · " + o.FrameMs.ToString("0.0") + " ms per frame"; c = Theme.Green; pulse = true; }
+            else if (st == HoloOverlay.RunState.Running)
+            {
+                string where = o.HoloFound ? "holo found" : o.HipLearned ? "watching for the holo" : "look around once to find the hip-fire holo";
+                text = "Working · " + where + " · " + o.Fps + " fps"; c = Theme.Green; pulse = true;
+            }
             else { text = "Starting…"; c = Theme.Amber; }
             Theme.PulseDot(g, new PointF(x + 4 * S, r.Y + 41 * S), 8 * S, c, pulse);
             Theme.Txt(g, text, Theme.F(14, semibold: true), Theme.Text, new RectangleF(x + 22 * S, r.Y + 29 * S, Math.Max(20, onToggle.Bounds.X - x - 46 * S), 24 * S));

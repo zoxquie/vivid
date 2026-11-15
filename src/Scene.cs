@@ -59,7 +59,7 @@ namespace Vivid
 
         // ---- display-size pictures: filtered at exactly the size they're shown, with rounded corners baked in,
         // so the preview is a plain copy each frame instead of a resample.
-        sealed class Fit { public byte[] Src, Mask; public int W, H; }
+        sealed class Fit { public byte[] Src, Mask; public int W, H; public int[] Edge; }
         static readonly Dictionary<string, Fit> fits = new Dictionary<string, Fit>();
         static readonly LinkedList<string> fitOrder = new LinkedList<string>();
         static readonly Dictionary<string, Bitmap> fitted = new Dictionary<string, Bitmap>();
@@ -105,20 +105,31 @@ namespace Vivid
                 return hit;
             }
             var fit = GetFit(src, sk, w, h, radius, focusX);
-            var dst = new byte[fit.Src.Length];
-            if (v == null) Buffer.BlockCopy(fit.Src, 0, dst, 0, dst.Length);
-            else ApplyFast(fit.Src, dst, v);
-            // rounded corners: premultiplied, so scale every channel by the mask
-            var mask = fit.Mask;
-            for (int p = 0, i = 0; p < mask.Length; p++, i += 4)
-            {
-                int m = mask[p];
-                if (m == 255) continue;
-                dst[i] = (byte)(dst[i] * m / 255); dst[i + 1] = (byte)(dst[i + 1] * m / 255); dst[i + 2] = (byte)(dst[i + 2] * m / 255); dst[i + 3] = (byte)m;
-            }
             var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
             var bd = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
-            for (int y = 0; y < h; y++) Marshal.Copy(dst, y * w * 4, bd.Scan0 + y * bd.Stride, w * 4);
+            unsafe
+            {
+                byte* basePtr = (byte*)bd.Scan0;
+                int stride = bd.Stride;
+                // the filter writes straight into the bitmap (no extra copies)
+                if (v == null)
+                    for (int y = 0; y < h; y++) Marshal.Copy(fit.Src, y * w * 4, bd.Scan0 + y * stride, w * 4);
+                else ApplyFast(fit.Src, basePtr, stride, w, h, v);
+                // rounded corners: premultiplied, so scale every channel by the mask (only the few edge pixels)
+                var mask = fit.Mask;
+                if (fit.Edge == null)
+                {
+                    var edge = new List<int>();
+                    for (int p = 0; p < mask.Length; p++) if (mask[p] != 255) edge.Add(p);
+                    fit.Edge = edge.ToArray();
+                }
+                foreach (int p in fit.Edge)
+                {
+                    int m = mask[p];
+                    byte* q = basePtr + (p / w) * stride + (p % w) * 4;
+                    q[0] = (byte)(q[0] * m / 255); q[1] = (byte)(q[1] * m / 255); q[2] = (byte)(q[2] * m / 255); q[3] = (byte)m;
+                }
+            }
             bmp.UnlockBits(bd);
             fitted[k] = bmp;
             fittedOrder.AddFirst(k);
@@ -169,7 +180,7 @@ namespace Vivid
         }
 
         /// <summary>Same math as <see cref="Apply"/>, with lookup tables (fixed point) so it runs a few times faster.</summary>
-        static void ApplyFast(byte[] s, byte[] d, FilterValues v)
+        static unsafe void ApplyFast(byte[] s, byte* dBase, int stride, int w, int h, FilterValues v)
         {
             var a = new double[3, 3];
             var off = new double[3];
@@ -186,17 +197,30 @@ namespace Vivid
             var lut = new byte[1024];
             for (int i = 0; i < 1024; i++) lut[i] = (byte)Math.Round(ColorMath.NightCurve(i / 1023.0, v.NightVision) * 255);
             int[] t00 = t[0], t01 = t[1], t02 = t[2], t10 = t[3], t11 = t[4], t12 = t[5], t20 = t[6], t21 = t[7], t22 = t[8];
-            for (int i = 0; i < s.Length; i += 4)
+            // split big pictures across cores (by rows) so dragging a slider over a large preview stays smooth
+            int parts = w * h < 60000 ? 1 : Math.Min(Environment.ProcessorCount, 8);
+            int per = (h + parts - 1) / parts;
+            long baseAddr = (long)dBase;
+            System.Threading.Tasks.Parallel.For(0, parts, part =>
             {
-                int b = s[i], g = s[i + 1], r = s[i + 2];
-                int ro = (t00[r] + t01[g] + t02[b] + o0 + 32) >> 6;
-                int go = (t10[r] + t11[g] + t12[b] + o1 + 32) >> 6;
-                int bo = (t20[r] + t21[g] + t22[b] + o2 + 32) >> 6;
-                d[i] = lut[bo < 0 ? 0 : bo > 1023 ? 1023 : bo];
-                d[i + 1] = lut[go < 0 ? 0 : go > 1023 ? 1023 : go];
-                d[i + 2] = lut[ro < 0 ? 0 : ro > 1023 ? 1023 : ro];
-                d[i + 3] = 255;
-            }
+                byte* dRow0 = (byte*)baseAddr;
+                int y1 = Math.Min(h, (part + 1) * per);
+                for (int y = part * per; y < y1; y++)
+                {
+                    byte* d = dRow0 + y * stride;
+                    for (int x = 0, i = y * w * 4; x < w; x++, i += 4, d += 4)
+                    {
+                        int b = s[i], g = s[i + 1], r = s[i + 2];
+                        int ro = (t00[r] + t01[g] + t02[b] + o0 + 32) >> 6;
+                        int go = (t10[r] + t11[g] + t12[b] + o1 + 32) >> 6;
+                        int bo = (t20[r] + t21[g] + t22[b] + o2 + 32) >> 6;
+                        d[0] = lut[bo < 0 ? 0 : bo > 1023 ? 1023 : bo];
+                        d[1] = lut[go < 0 ? 0 : go > 1023 ? 1023 : go];
+                        d[2] = lut[ro < 0 ? 0 : ro > 1023 ? 1023 : ro];
+                        d[3] = 255;
+                    }
+                }
+            });
         }
 
         static readonly Dictionary<string, Bitmap> biomes = new Dictionary<string, Bitmap>();
@@ -522,6 +546,8 @@ namespace Vivid
     {
         public float Split = 0.5f;
         bool dragging;
+        /// <summary>Big main-page look: the picture fills the card and the label sits on it.</summary>
+        public bool Hero;
         static AppController Ctl => Ui.Form.Ctl;
 
         public override bool Interactive => true;
@@ -532,6 +558,7 @@ namespace Vivid
         {
             get
             {
+                if (Hero) { float hp = 8 * S; return RectangleF.Inflate(Bounds, -hp, -hp); }
                 float pad = 12 * S, top = 50 * S;
                 return new RectangleF(Bounds.X + pad, Bounds.Y + top, Bounds.Width - 2 * pad, Bounds.Height - top - pad);
             }
@@ -582,19 +609,22 @@ namespace Vivid
             bool editing = Ctl.Editing;
             var picture = Picture(shown);
 
-            Theme.Txt(g, "Preview", Theme.F(15, semibold: true), Theme.Text, new RectangleF(r.X + 18 * S, r.Y + 12 * S, r.Width / 2, 28 * S));
             var cf = Theme.F(12, semibold: true);
             string chip = hovering ? "Hovering " + label : label;
             Color chipCol = hovering ? Theme.Accent : editing ? Theme.Amber : Theme.White(255);
             bool lit = hovering || editing;
-            float cw = Math.Min(r.Width * 0.66f, Theme.Measure(chip, cf).Width + 24 * S);
-            var cr = new RectangleF(r.Right - 14 * S - cw, r.Y + 13 * S, cw, 26 * S);
-            Theme.FillRound(g, cr, 13 * S, lit ? Theme.WithAlpha(chipCol, 50) : Theme.White(10));
-            Theme.StrokeRound(g, cr, 13 * S, lit ? Theme.WithAlpha(chipCol, 170) : Theme.White(26), Math.Max(1, S));
-            Theme.Txt(g, chip, cf, lit ? Theme.Text : Theme.TextMuted, RectangleF.Inflate(cr, -10 * S, 0), Theme.H.Center);
+            if (!Hero)
+            {
+                Theme.Txt(g, "Preview", Theme.F(15, semibold: true), Theme.Text, new RectangleF(r.X + 18 * S, r.Y + 12 * S, r.Width / 2, 28 * S));
+                float cw = Math.Min(r.Width * 0.66f, Theme.Measure(chip, cf).Width + 24 * S);
+                var cr = new RectangleF(r.Right - 14 * S - cw, r.Y + 13 * S, cw, 26 * S);
+                Theme.FillRound(g, cr, 13 * S, lit ? Theme.WithAlpha(chipCol, 50) : Theme.White(10));
+                Theme.StrokeRound(g, cr, 13 * S, lit ? Theme.WithAlpha(chipCol, 170) : Theme.White(26), Math.Max(1, S));
+                Theme.Txt(g, chip, cf, lit ? Theme.Text : Theme.TextMuted, RectangleF.Inflate(cr, -10 * S, 0), Theme.H.Center);
+            }
 
             var imgF = ImageRect;
-            float rad = 12 * S;
+            float rad = (Hero ? 13 : 12) * S;
             {
                 // both halves are pre-made at the exact on-screen size, so this is two straight copies
                 var img = new RectangleF((float)Math.Round(imgF.X), (float)Math.Round(imgF.Y), (float)Math.Round(imgF.Width), (float)Math.Round(imgF.Height));
@@ -624,8 +654,21 @@ namespace Vivid
                     g.DrawLines(p, new[] { new PointF(cx + 3 * S, cy - a), new PointF(cx + 3 * S + a, cy), new PointF(cx + 3 * S, cy + a) });
                 }
 
-                Badge(g, "BEFORE", new PointF(img.X + 10 * S, img.Bottom - 10 * S), left: true, show: Split > 0.2f, accent: Color.Empty);
-                Badge(g, "AFTER", new PointF(img.Right - 10 * S, img.Bottom - 10 * S), left: false, show: Split < 0.8f, accent: editing && !hovering ? Theme.Amber : Theme.Accent);
+                Badge(g, "BEFORE", new PointF(img.X + 12 * S, img.Bottom - 12 * S), left: true, show: Split > 0.2f, accent: Color.Empty);
+                Badge(g, "AFTER", new PointF(img.Right - 12 * S, img.Bottom - 12 * S), left: false, show: Split < 0.8f, accent: editing && !hovering ? Theme.Amber : Theme.Accent);
+                if (Hero)
+                {
+                    // label on the picture: a dark glass pill with a status dot
+                    var hf = Theme.F(12.5f, semibold: true);
+                    float tw = Math.Min(img.Width * 0.6f, Theme.Measure(chip, hf).Width);
+                    var pill = new RectangleF(img.X + 12 * S, img.Y + 12 * S, tw + 38 * S, 30 * S);
+                    Theme.FillRound(g, pill, 15 * S, Theme.Black(150));
+                    Theme.StrokeRound(g, pill, 15 * S, lit ? Theme.WithAlpha(chipCol, 150) : Theme.White(40), Math.Max(1, S));
+                    float dd = 7 * S;
+                    var dotR = new RectangleF(pill.X + 13 * S, pill.Y + (pill.Height - dd) / 2, dd, dd);
+                    using (var b = new SolidBrush(lit ? chipCol : Theme.Accent)) g.FillEllipse(b, dotR);
+                    Theme.Txt(g, chip, hf, Theme.White(240), new RectangleF(dotR.Right + 8 * S, pill.Y, tw + 4 * S, pill.Height));
+                }
                 Theme.StrokeRound(g, img, rad, Theme.White(26), Math.Max(1, S));
             }
         }

@@ -36,6 +36,19 @@ namespace Vivid
         bool animRequested;
         DateTime lastPulse;
 
+        // Frame clock: while something animates, one frame is painted per display refresh (DwmFlush),
+        // so 60, 144 and 240 Hz screens all get even, tear-free motion. Idle, nothing runs.
+        System.Threading.Thread frameThread;
+        readonly System.Threading.ManualResetEvent framesOn = new System.Threading.ManualResetEvent(false);
+        int frameQueued;
+        volatile bool closingFrames;
+        bool hiResTimer;
+        Action frameTick;
+        // pages fade in when you switch tabs
+        DateTime pageFadeAt = DateTime.MinValue;
+        const double PageFadeMs = 180;
+        RectangleF lastToastRect;
+
         readonly NotifyIcon tray;
         bool exiting;
         bool allowShow;
@@ -77,6 +90,7 @@ namespace Vivid
             uiTimer = new Timer { Interval = 15 };
             uiTimer.Tick += UiTick;
             uiTimer.Start();
+            StartFrameClock();
 
             Ctl.Changed += () => { if (!IsDisposed) { topBar.Sync(); Invalidate(); } };
             Updater.Changed += () =>
@@ -254,10 +268,13 @@ namespace Vivid
         {
             EndTextEdit(true);
             CancelKeyCapture();
+            var before = Current;
             Current = Current == id && id == PageId.Settings ? PageId.Filters : id;
             if (Current == PageId.Settings) Ctl.Engine.ProbeNv(); // fills in the vibrance status line
+            if (Current != before && Anim.Enabled) pageFadeAt = DateTime.UtcNow;
             DoLayout();
             Invalidate();
+            KickFrames();
         }
 
         public Page CurrentPage => pages[Current];
@@ -310,9 +327,103 @@ namespace Vivid
             PaintBackground(g, ClientSize);
             if (topOnly) { topBar.Paint(g); return; }
             PaintAll(g, ClientSize, background: false);
+            if (WantsFrames()) KickFrames(); // start the next frame on the next refresh, not the next timer tick
         }
 
-        public void RequestAnimationFrame() => animRequested = true;
+        public void RequestAnimationFrame() { animRequested = true; KickFrames(); }
+
+        static System.Drawing.Imaging.ImageAttributes fadeAttr;
+        static int fadeAlpha = -1;
+        static System.Drawing.Imaging.ImageAttributes FadeAttributes(int alpha)
+        {
+            if (alpha == fadeAlpha && fadeAttr != null) return fadeAttr;
+            fadeAttr?.Dispose();
+            fadeAttr = new System.Drawing.Imaging.ImageAttributes();
+            fadeAttr.SetColorMatrix(new System.Drawing.Imaging.ColorMatrix { Matrix33 = alpha / 255f });
+            fadeAlpha = alpha;
+            return fadeAttr;
+        }
+
+        bool PageFading => (DateTime.UtcNow - pageFadeAt).TotalMilliseconds < PageFadeMs;
+
+        bool ToastMoving
+        {
+            get
+            {
+                if (toastText == null) return false;
+                double ms = (DateTime.UtcNow - toastAt).TotalMilliseconds;
+                return ms < 160 || ms > 2260; // fading in, fading out or about to clear
+            }
+        }
+
+        bool WantsFrames() => animRequested || ToastMoving || PageFading || Anim.Busy;
+
+        /// <summary>Marks what moves this frame for repainting. False when nothing is animating.</summary>
+        bool AnimateNow()
+        {
+            if (!Visible || WindowState == FormWindowState.Minimized) return false;
+            bool any = false;
+            if (animRequested || PageFading) { animRequested = false; Invalidate(); return true; }
+            if (ToastMoving)
+            {
+                any = true;
+                var tr = lastToastRect.IsEmpty ? new RectangleF(0, ClientSize.Height - 120 * Theme.Scale, ClientSize.Width, 120 * Theme.Scale) : RectangleF.Inflate(lastToastRect, 24 * Theme.Scale, 24 * Theme.Scale);
+                Invalidate(Rectangle.Ceiling(tr));
+            }
+            if (Anim.Busy)
+            {
+                any = true;
+                // repaint just the widgets that are still animating
+                if (Anim.DirtyArea(out var area)) Invalidate(area); else Invalidate();
+            }
+            return any;
+        }
+
+        void StartFrameClock()
+        {
+            if (!Native.IsWindows) return; // previews and tests use the timer
+            frameTick = FrameTick;
+            frameThread = new System.Threading.Thread(() =>
+            {
+                var clock = System.Diagnostics.Stopwatch.StartNew();
+                double last = 0;
+                while (!closingFrames)
+                {
+                    framesOn.WaitOne();
+                    if (closingFrames) break;
+                    int hr;
+                    try { hr = Native.DwmFlush(); } catch { hr = -1; }
+                    double now = clock.Elapsed.TotalMilliseconds;
+                    // DwmFlush returns straight away when the compositor has nothing to do: don't spin
+                    if (hr != 0 || now - last < 2) { System.Threading.Thread.Sleep(hr != 0 ? 7 : 3); now = clock.Elapsed.TotalMilliseconds; }
+                    last = now;
+                    if (System.Threading.Interlocked.CompareExchange(ref frameQueued, 1, 0) != 0) continue; // last frame still painting
+                    try { if (IsHandleCreated && !IsDisposed) BeginInvoke(frameTick); else frameQueued = 0; }
+                    catch { frameQueued = 0; }
+                }
+            }) { IsBackground = true, Name = "Fjord Vision frames", Priority = System.Threading.ThreadPriority.AboveNormal };
+            frameThread.Start();
+        }
+
+        void FrameTick()
+        {
+            frameQueued = 0;
+            if (!AnimateNow()) { StopFrames(); return; }
+            Update(); // paint now, right after the refresh, instead of whenever WM_PAINT comes round
+        }
+
+        void KickFrames()
+        {
+            if (frameThread == null || closingFrames) return;
+            if (!hiResTimer) { try { Native.timeBeginPeriod(1); hiResTimer = true; } catch { } }
+            framesOn.Set();
+        }
+
+        void StopFrames()
+        {
+            framesOn.Reset();
+            if (hiResTimer) { try { Native.timeEndPeriod(1); } catch { } hiResTimer = false; }
+        }
 
         /// <summary>Deep background with soft coloured light and a faint dot grid. Cached per window size.</summary>
         void PaintBackground(Graphics g, Size size)
@@ -330,7 +441,7 @@ namespace Vivid
                     Theme.RadialGlow(bg, new PointF(w * 0.06f, h * 0.28f), w * 0.40f, h * 0.55f, Theme.Accent, 26);
                     Theme.RadialGlow(bg, new PointF(w * 0.95f, h * 1.05f), w * 0.40f, h * 0.45f, Theme.AccentEnd, 30);
                     float step = 34 * S;
-                    using (var line = new Pen(Color.FromArgb(34, 38, 62, 75), Math.Max(1, S)))
+                    using (var line = new Pen(Color.FromArgb(20, 38, 62, 75), Math.Max(1, S)))
                     {
                         for (float y = step; y < h; y += step) bg.DrawLine(line, 0, y, w, y);
                         for (float x = step; x < w; x += step) bg.DrawLine(line, x, 0, x, h);
@@ -348,6 +459,21 @@ namespace Vivid
             if (background) PaintBackground(g, size);
             topBar.Paint(g);
             pages[Current].Paint(g);
+            if (PageFading)
+            {
+                // the new page fades in over the background
+                float t = (float)((DateTime.UtcNow - pageFadeAt).TotalMilliseconds / PageFadeMs);
+                int a = (int)(235 * (1 - Anim.EaseOut(Math.Max(0, Math.Min(1, t)))));
+                if (a > 0)
+                {
+                    float top = TopBarH * S;
+                    var st = g.Save();
+                    g.SetClip(new RectangleF(0, top, size.Width, size.Height - top), CombineMode.Intersect);
+                    g.DrawImage(bgCache ?? new Bitmap(1, 1), new Rectangle(0, 0, size.Width, size.Height), 0, 0, size.Width, size.Height, GraphicsUnit.Pixel,
+                        FadeAttributes(a));
+                    g.Restore(st);
+                }
+            }
             dialog?.Paint(g);
             PaintToast(g, size);
             PaintTooltip(g, size);
@@ -370,6 +496,8 @@ namespace Vivid
             var ts = Theme.Measure(toastText, f);
             float w = ts.Width + 40 * S, h = 40 * S;
             var r = new RectangleF((size.Width - w) / 2, size.Height - h - 30 * S, w, h);
+            lastToastRect = r;
+            alpha = Anim.EaseOut(Math.Max(0, alpha));
             r.Y += (1 - alpha) * 10 * S;
             Theme.Glow(g, r, h / 2, Theme.AccentMid, 12 * S, (int)(60 * alpha));
             Theme.FillRound(g, r, h / 2, Theme.WithAlpha(Theme.Hex("#0D1B27"), (int)(250 * alpha)));
@@ -397,13 +525,12 @@ namespace Vivid
         void UiTick(object s, EventArgs e)
         {
             if (!Visible || WindowState == FormWindowState.Minimized) return;
-            if (animRequested || toastText != null) { animRequested = false; Invalidate(); return; }
-            if (Anim.Busy)
+            if (frameThread != null)
             {
-                // repaint just the widgets that are still animating
-                if (Anim.DirtyArea(out var area)) Invalidate(area); else Invalidate();
-                return;
+                if (WantsFrames()) { KickFrames(); return; }
             }
+            else if (AnimateNow()) return;
+            if (toastText != null && (DateTime.UtcNow - toastAt).TotalMilliseconds > 2600) { toastText = null; Invalidate(Rectangle.Ceiling(RectangleF.Inflate(lastToastRect, 24 * Theme.Scale, 24 * Theme.Scale))); }
             if (Ui.Hover != null && !string.IsNullOrEmpty(Ui.Hover.Tooltip))
             {
                 double ms = (DateTime.UtcNow - hoverSince).TotalMilliseconds;
@@ -870,7 +997,13 @@ namespace Vivid
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { uiTimer.Dispose(); edit.Dispose(); bgCache?.Dispose(); }
+            if (disposing)
+            {
+                closingFrames = true;
+                framesOn.Set();
+                if (hiResTimer) { try { Native.timeEndPeriod(1); } catch { } hiResTimer = false; }
+                uiTimer.Dispose(); edit.Dispose(); bgCache?.Dispose();
+            }
             base.Dispose(disposing);
         }
     }

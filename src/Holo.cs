@@ -8,58 +8,86 @@ using System.Windows.Forms;
 
 namespace Vivid
 {
+    /// <summary>The colour thresholds for one reticle colour and tolerance. The GPU shader uses the same numbers.</summary>
+    public struct HoloRule
+    {
+        public double H, S, V, HueWin, SatMin, ValMin, Tol;
+        public bool Grey;
+
+        public static HoloRule From(HoloSettings s)
+        {
+            var t = Color.FromArgb(s.Target);
+            HoloMatcher.Hsv(t.R, t.G, t.B, out double th, out double ts, out double tv);
+            double tol = Math.Max(0, Math.Min(1, s.Tolerance / 100.0));
+            // Tight on purpose: the reticle is drawn bright and fully saturated, while red and orange things in the
+            // world (wood, rust, skin, fire, barrels) are darker or duller once Rust has lit them.
+            return new HoloRule
+            {
+                H = th, S = ts, V = tv, Tol = tol, Grey = ts < 0.15,
+                HueWin = 5 + 15 * tol,
+                SatMin = Math.Max(0.42, ts * (0.9 - 0.4 * tol)),
+                ValMin = Math.Max(0.42, tv * (0.86 - 0.4 * tol)),
+            };
+        }
+
+        /// <summary>3 = the reticle's colour, 2 = its over-bright core, 1 = its glow, 0 = anything else.
+        /// Core and glow only count right next to reticle pixels.</summary>
+        public byte Classify(double h, double s, double v)
+        {
+            if (Grey) return (byte)(s < 0.12 + 0.1 * Tol && v >= V - 0.06 - 0.15 * Tol ? 3 : 0);
+            double dh = Math.Abs(h - H); if (dh > 180) dh = 360 - dh;
+            if (dh <= HueWin && s >= SatMin && v >= ValMin) return 3;
+            if (v >= 0.82 && s <= 0.5 && (dh <= HueWin * 2.5 || s < 0.1)) return 2;
+            if (dh <= Math.Max(HueWin * 1.8, 35) && s >= 0.15 && v >= 0.2) return 1; // glow blended into whatever is behind it
+            return 0;
+        }
+    }
+
     /// <summary>
-    /// Finds the holosight reticle's pixels in a screen capture and builds the overlay that recolors them.
-    /// Pure pixel logic (no Windows calls) so it can be tested anywhere.
+    /// The black holo's pixel rules on the CPU, matching the GPU shader in <see cref="HoloGpu"/>. Used for the
+    /// preview on the Holo page and for tests. Only tiles inside <see cref="Zone"/> (where the holo is) change:
+    /// <list type="bullet">
+    /// <item>pixels of the reticle's colour turn into the output colour,</item>
+    /// <item>its over-bright core and its glow do too when they're within 3 px of the reticle,</item>
+    /// <item>pixels 1 px from the reticle get a soft edge,</item>
+    /// <item>tiles where the colour covers big patches (a sign, a red sky) are left alone.</item>
+    /// </list>
     /// </summary>
     public sealed class HoloMatcher
     {
-        // 32×32×32 colour classes: 0 = no, 1 = reticle, 2 = glow (only counts next to reticle pixels)
-        readonly byte[] lut = new byte[32 * 32 * 32];
+        public const int Tile = 16, TileShift = 4, Glow = 3;
+        HoloRule rule;
         byte[] cls = new byte[0];
-        int[] hits = new int[0];
-        int hitCount;
-        readonly List<int> painted = new List<int>();
+        // within 3 px / within 1 px of a reticle pixel (spread with running counts, two passes each)
+        byte[] nearG = new byte[0], near1 = new byte[0];
+        int[] runs = new int[0];
+        // direct-mapped cache of colour → class (exact, just faster than working out HSV for every pixel)
+        readonly int[] cacheKey = new int[1 << 16];
+        readonly byte[] cacheVal = new byte[1 << 16];
+        int[] tileHits = new int[0];
+        long[] tileLum = new long[0];
         string key;
 
         public int Width { get; private set; }
         public int Height { get; private set; }
+        public int TilesW { get; private set; }
+        public int TilesH { get; private set; }
+        /// <summary>Share of each 16×16 tile that has the reticle's colour (0–255), from the last frame.</summary>
+        public byte[] TileCoverage = new byte[0];
+        /// <summary>Average brightness of each tile (0–255), from the last frame.</summary>
+        public byte[] TileLuma = new byte[0];
+        /// <summary>255 where the holo is (per tile); null means everywhere.</summary>
+        public byte[] Zone;
         /// <summary>Pixels recolored in the last frame.</summary>
         public int Changed { get; private set; }
-        /// <summary>Box around the pixels that changed since the previous frame (overlay coordinates).</summary>
-        public Rectangle Dirty { get; private set; }
 
         public void Configure(HoloSettings s)
         {
             string k = s.Target + "|" + s.Tolerance;
             if (k == key) return;
             key = k;
-            var t = Color.FromArgb(s.Target);
-            Hsv(t.R, t.G, t.B, out double th, out double ts, out double tv);
-            double tol = s.Tolerance / 100.0;
-            double hueWin = 8 + 26 * tol;
-            double satMin = Math.Max(0.22, ts * (0.78 - 0.4 * tol));
-            double valMin = Math.Max(0.18, tv * (0.62 - 0.32 * tol));
-            bool grey = ts < 0.15; // a white/grey reticle: match by brightness instead of hue
-            for (int r = 0; r < 32; r++)
-                for (int g = 0; g < 32; g++)
-                    for (int b = 0; b < 32; b++)
-                    {
-                        // centre of the 8-level bucket
-                        Hsv(r * 8 + 4, g * 8 + 4, b * 8 + 4, out double h, out double sat, out double v);
-                        byte c = 0;
-                        if (grey)
-                        {
-                            if (sat < 0.12 + 0.1 * tol && v >= tv - 0.08 - 0.2 * tol) c = 1;
-                        }
-                        else
-                        {
-                            double dh = Math.Abs(h - th); if (dh > 180) dh = 360 - dh;
-                            if (dh <= hueWin && sat >= satMin && v >= valMin) c = 1;
-                            else if (dh <= hueWin * 1.5 && sat >= 0.12 && v >= 0.5) c = 2; // bright core / halo of the glow
-                        }
-                        lut[(r << 10) | (g << 5) | b] = c;
-                    }
+            rule = HoloRule.From(s);
+            for (int i = 0; i < cacheKey.Length; i++) cacheKey[i] = -1;
         }
 
         public static void Hsv(int r, int g, int b, out double h, out double s, out double v)
@@ -80,85 +108,352 @@ namespace Vivid
             if (w == Width && h == Height) return;
             Width = w; Height = h;
             cls = new byte[w * h];
-            hits = new int[Math.Max(1024, w * h / 16)];
-            painted.Clear();
+            nearG = new byte[w * h]; near1 = new byte[w * h];
+            runs = new int[w * h];
+            TilesW = Math.Max(1, w >> TileShift); TilesH = Math.Max(1, h >> TileShift);
+            int n = TilesW * TilesH;
+            tileHits = new int[n]; tileLum = new long[n];
+            TileCoverage = new byte[n]; TileLuma = new byte[n];
+        }
+
+        bool InZone(int x, int y)
+        {
+            int tx = x >> TileShift, ty = y >> TileShift;
+            if (tx >= TilesW || ty >= TilesH) return false;
+            return Zone == null || Zone[ty * TilesW + tx] >= 128;
         }
 
         /// <summary>
-        /// src: captured BGRA pixels (top-down, stride = w*4). dst: the overlay's premultiplied BGRA pixels, which
-        /// still hold the previous frame; only the pixels that change are touched.
+        /// src: captured BGRA pixels (top-down, stride = w*4). dst: premultiplied BGRA overlay, rewritten each call
+        /// (transparent where nothing changes).
         /// </summary>
         public unsafe void Process(byte* src, byte* dst, Color output)
         {
-            int w = Width, h = Height, n = w * h;
-            hitCount = 0;
-            bool overflow = false;
-            fixed (byte* lp = lut, cp = cls)
+            int w = Width, h = Height, n = w * h, tw = TilesW, th = TilesH;
+            Array.Clear(tileHits, 0, tileHits.Length);
+            Array.Clear(tileLum, 0, tileLum.Length);
+            fixed (byte* cp = cls)
             {
-                for (int i = 0, o = 0; i < n; i++, o += 4)
+                // exact colours, like the shader (a small cache: neighbouring pixels repeat a lot)
+                int lastRgb = -1; byte lastC = 0;
+                for (int y = 0, i = 0; y < h; y++)
                 {
-                    byte c = lp[((src[o + 2] >> 3) << 10) | ((src[o + 1] >> 3) << 5) | (src[o] >> 3)];
-                    cp[i] = c;
-                    if (c == 1)
+                    int ty = y >> TileShift;
+                    for (int x = 0; x < w; x++, i++)
                     {
-                        if (hitCount < hits.Length) hits[hitCount++] = i;
-                        else overflow = true;
-                    }
-                }
-
-                // clear what we drew last frame
-                int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
-                foreach (int i in painted)
-                {
-                    *(uint*)(dst + i * 4) = 0;
-                    Grow(i, w, ref minX, ref minY, ref maxX, ref maxY);
-                }
-                painted.Clear();
-
-                // a screen full of the target colour isn't a reticle: leave it alone
-                if (!overflow && hitCount > 0)
-                {
-                    uint solid = Pack(output, 255), soft = Pack(output, 150);
-                    const byte Done = 9;
-                    // the reticle itself, plus glow pixels within 2 px of it
-                    for (int k = 0; k < hitCount; k++)
-                    {
-                        int i = hits[k], x = i % w, y = i / w;
-                        for (int dy = -2; dy <= 2; dy++)
+                        int o = i * 4;
+                        int rgb = src[o + 2] << 16 | src[o + 1] << 8 | src[o];
+                        byte c;
+                        if (rgb == lastRgb) c = lastC;
+                        else
                         {
-                            int yy = y + dy; if (yy < 0 || yy >= h) continue;
-                            for (int dx = -2; dx <= 2; dx++)
+                            int slot = (int)(((uint)rgb * 0x9E3779B1u) >> 16) & 0xFFFF;
+                            if (cacheKey[slot] == rgb) c = cacheVal[slot];
+                            else
                             {
-                                int xx = x + dx; if (xx < 0 || xx >= w) continue;
-                                int j = yy * w + xx;
-                                byte c = cp[j];
-                                if (c == Done) continue;
-                                if (c == 1 || c == 2 || (dx >= -1 && dx <= 1 && dy >= -1 && dy <= 1))
-                                {
-                                    // solid on matching pixels; a softer 1 px edge for anti-aliasing
-                                    *(uint*)(dst + j * 4) = c == 0 ? soft : solid;
-                                    cp[j] = Done;
-                                    painted.Add(j);
-                                    Grow(j, w, ref minX, ref minY, ref maxX, ref maxY);
-                                }
+                                Hsv(src[o + 2], src[o + 1], src[o], out double hh, out double ss, out double vv);
+                                c = rule.Classify(hh, ss, vv);
+                                cacheKey[slot] = rgb; cacheVal[slot] = c;
                             }
+                            lastRgb = rgb; lastC = c;
+                        }
+                        cp[i] = c;
+                        int tx = x >> TileShift;
+                        if (tx < tw && ty < th)
+                        {
+                            int t = ty * tw + tx;
+                            if (c == 3) tileHits[t]++;
+                            tileLum[t] += (src[o + 2] * 299 + src[o + 1] * 587 + src[o] * 114) / 1000;
                         }
                     }
                 }
-                Changed = painted.Count;
-                Dirty = maxX < 0 ? Rectangle.Empty : Rectangle.FromLTRB(minX, minY, maxX + 1, maxY + 1);
+                const int per = Tile * Tile;
+                for (int t = 0; t < tileHits.Length; t++)
+                {
+                    TileCoverage[t] = (byte)Math.Min(255, (tileHits[t] * 255 + per / 2) / per);
+                    TileLuma[t] = (byte)Math.Min(255, tileLum[t] / per);
+                }
+
+                Spread(cls, nearG, Glow);
+                Spread(cls, near1, 1);
+
+                uint solid = Pack(output, 255), soft = Pack(output, 150);
+                int changed = 0;
+                for (int y = 0, i = 0; y < h; y++)
+                {
+                    for (int x = 0; x < w; x++, i++)
+                    {
+                        uint px = 0;
+                        if (nearG[i] != 0 && InZone(x, y) && !BigPatch(x >> TileShift, y >> TileShift))
+                        {
+                            byte self = cp[i];
+                            if (self >= 1) px = solid;   // the reticle, and its core and glow within 3 px
+                            else if (near1[i] != 0) px = soft;        // a soft 1 px edge
+                        }
+                        *(uint*)(dst + i * 4) = px;
+                        if (px != 0) changed++;
+                    }
+                }
+                Changed = changed;
             }
         }
 
-        static void Grow(int i, int w, ref int minX, ref int minY, ref int maxX, ref int maxY)
+        /// <summary>out = 1 where a reticle pixel (class 3) is within r px (a (2r+1)² square), via running counts.</summary>
+        void Spread(byte[] c, byte[] o, int r)
         {
-            int x = i % w, y = i / w;
-            if (x < minX) minX = x; if (x > maxX) maxX = x;
-            if (y < minY) minY = y; if (y > maxY) maxY = y;
+            int w = Width, h = Height;
+            // across: how many reticle pixels in x-r..x+r of this row
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * w, cnt = 0;
+                for (int x = 0; x < Math.Min(r, w); x++) if (c[row + x] == 3) cnt++;
+                for (int x = 0; x < w; x++)
+                {
+                    int add = x + r, rem = x - r - 1;
+                    if (add < w && c[row + add] == 3) cnt++;
+                    if (rem >= 0 && c[row + rem] == 3) cnt--;
+                    runs[row + x] = cnt;
+                }
+            }
+            // down: any of those within y-r..y+r
+            for (int x = 0; x < w; x++)
+            {
+                int cnt = 0;
+                for (int y = 0; y < Math.Min(r, h); y++) cnt += runs[y * w + x] > 0 ? 1 : 0;
+                for (int y = 0; y < h; y++)
+                {
+                    int add = y + r, rem = y - r - 1;
+                    if (add < h && runs[add * w + x] > 0) cnt++;
+                    if (rem >= 0 && runs[rem * w + x] > 0) cnt--;
+                    o[y * w + x] = (byte)(cnt > 0 ? 1 : 0);
+                }
+            }
+        }
+
+        /// <summary>Big patches of the colour (more than 45% of a tile, or of a tile next to it) aren't a reticle.</summary>
+        bool BigPatch(int tx, int ty)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int x = tx + dx, y = ty + dy;
+                    if (x < 0 || y < 0 || x >= TilesW || y >= TilesH) continue;
+                    if (TileCoverage[y * TilesW + x] > 115) return true;
+                }
+            return false;
         }
 
         static uint Pack(Color c, int a) =>
             (uint)a << 24 | (uint)(c.R * a / 255) << 16 | (uint)(c.G * a / 255) << 8 | (uint)(c.B * a / 255);
+    }
+
+    /// <summary>
+    /// Works out where on screen the holosight is, from a 16×16-pixel summary of each frame (how much of each tile
+    /// has the reticle's colour, and how bright it is). Only those tiles get recoloured, so red and orange things
+    /// anywhere else are never touched.
+    /// <para>Aiming down sights, the reticle sits in the middle of the screen: that circle is always watched.
+    /// In hip fire the holo sits on the gun, and the gun moves with the camera. So while you look around, the
+    /// picture shifts but the reticle stays in the same tiles. Every ~30 ms this compares the summary with one from
+    /// a moment ago, measures how far the picture moved (by lining up the tile brightness), and checks every spot
+    /// that has the reticle's colour: one that stayed put while the world moved at least three tiles is the holo,
+    /// one that moved along with the world is part of the world and is dropped at once.</para>
+    /// Pure logic, no Windows calls, so it's tested on its own.
+    /// </summary>
+    public sealed class HoloZones
+    {
+        public int TilesW { get; private set; }
+        public int TilesH { get; private set; }
+        int screenW, screenH;
+        float[] score = new float[0];
+        bool[] center = new bool[0];
+        public byte[] Zone = new byte[0];
+        readonly List<Snap> history = new List<Snap>();
+        int[] stack = new int[0];
+        bool[] seen = new bool[0];
+        double lastStep = double.NegativeInfinity;
+
+        /// <summary>Radius of the always-watched circle in the middle, as a share of the screen height.</summary>
+        public float CenterRadius = 0.09f;
+        /// <summary>Furthest the picture is searched for movement between two compared frames, in tiles.</summary>
+        public int MaxShift = 6;
+        /// <summary>Tiles the holo has been learned in (for the status line).</summary>
+        public int LearnedTiles { get; private set; }
+        /// <summary>True when the reticle's colour was seen in a watched tile last frame.</summary>
+        public bool Found { get; private set; }
+        /// <summary>How far the picture moved at the last learning step, in tiles (for tests).</summary>
+        public int LastShiftX, LastShiftY;
+
+        sealed class Snap { public double T; public byte[] Cov, Luma; }
+
+        public void Resize(int tilesW, int tilesH, int width, int height)
+        {
+            if (tilesW == TilesW && tilesH == TilesH && width == screenW && height == screenH) return;
+            TilesW = tilesW; TilesH = tilesH; screenW = width; screenH = height;
+            int n = tilesW * tilesH;
+            score = new float[n]; center = new bool[n]; Zone = new byte[n];
+            stack = new int[n]; seen = new bool[n];
+            history.Clear();
+            float cx = width / 2f, cy = height / 2f, r = CenterRadius * height + HoloMatcher.Tile;
+            for (int ty = 0; ty < tilesH; ty++)
+                for (int tx = 0; tx < tilesW; tx++)
+                {
+                    // nearest point of the tile to the middle of the screen
+                    float px = Math.Max(tx * 16f, Math.Min(cx, tx * 16f + 16)), py = Math.Max(ty * 16f, Math.Min(cy, ty * 16f + 16));
+                    center[ty * tilesW + tx] = (px - cx) * (px - cx) + (py - cy) * (py - cy) <= r * r;
+                }
+            BuildZone();
+        }
+
+        public void Reset()
+        {
+            Array.Clear(score, 0, score.Length);
+            history.Clear();
+            BuildZone();
+        }
+
+        /// <summary>Feeds one frame's tile summary (coverage and brightness, 0–255 each) taken at time tMs.</summary>
+        public void Update(byte[] cov, byte[] luma, double tMs)
+        {
+            int n = TilesW * TilesH;
+            if (tMs - lastStep >= 30)
+            {
+                lastStep = tMs;
+                Learn(cov, luma, tMs);
+                history.Add(new Snap { T = tMs, Cov = (byte[])cov.Clone(), Luma = (byte[])luma.Clone() });
+                while (history.Count > 0 && tMs - history[0].T > 600) history.RemoveAt(0);
+                DropBigBlobs();
+                BuildZone();
+            }
+            bool found = false;
+            for (int i = 0; i < n && !found; i++) if (Zone[i] != 0 && cov[i] > 0 && cov[i] <= 115) found = true;
+            Found = found;
+        }
+
+        void Learn(byte[] cov, byte[] luma, double tMs)
+        {
+            int w = TilesW, h = TilesH;
+            // the most recent earlier frame the picture has clearly moved against
+            Snap old = null; int sx = 0, sy = 0;
+            for (int k = history.Count - 1; k >= 0; k--)
+            {
+                var sn = history[k];
+                if (tMs - sn.T < 25) continue;
+                if (!BestShift(luma, sn.Luma, out int bx, out int by)) continue;
+                // 3+ tiles: far enough that something moving with the world can't still look "in the same spot"
+                if (Math.Max(Math.Abs(bx), Math.Abs(by)) >= 3) { old = sn; sx = bx; sy = by; break; }
+            }
+            LastShiftX = sx; LastShiftY = sy;
+            for (int i = 0; i < score.Length; i++)
+                if (cov[i] == 0 || cov[i] > 115) score[i] = Math.Max(0, score[i] - 0.01f);
+            if (old == null) return; // standing still or barely moving: nothing to learn from
+
+            for (int ty = 0; ty < h; ty++)
+                for (int tx = 0; tx < w; tx++)
+                {
+                    int i = ty * w + tx, c = cov[i];
+                    if (c == 0 || c > 115) continue;
+                    // in the old frame, was the colour at the same spot, or where the world was?
+                    bool stayed = Any(old.Cov, tx, ty), followed = Any(old.Cov, tx + sx, ty + sy);
+                    if (stayed && !followed) score[i] = Math.Min(1, score[i] + 0.2f);
+                    else if (followed && !stayed) score[i] = 0;
+                }
+        }
+
+        bool Any(byte[] c, int tx, int ty)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                int y = ty + dy; if (y < 0 || y >= TilesH) continue;
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int x = tx + dx; if (x < 0 || x >= TilesW) continue;
+                    int v = c[y * TilesW + x];
+                    if (v > 0 && v <= 115) return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// How far the picture moved between then and now, in tiles: the shift (sx, sy) where now[x, y] best matches
+        /// then[x + sx, y + sy]. Counts tiles that line up (brightness within 4) so a gun or HUD that doesn't move
+        /// can't outvote the world around it. False when no shift clearly beats standing still.
+        /// </summary>
+        bool BestShift(byte[] now, byte[] then, out int bx, out int by)
+        {
+            int w = TilesW, h = TilesH, m = MaxShift;
+            int best = -1, bestAt0 = 0; bx = by = 0;
+            for (int sy = -m; sy <= m; sy++)
+                for (int sx = -m; sx <= m; sx++)
+                {
+                    int hits = 0, total = 0;
+                    for (int y = Math.Max(0, -sy) + 1; y < Math.Min(h, h - sy) - 1; y += 2)
+                        for (int x = Math.Max(0, -sx) + 1; x < Math.Min(w, w - sx) - 1; x += 2)
+                        {
+                            total++;
+                            if (Math.Abs(now[y * w + x] - then[(y + sy) * w + x + sx]) <= 4) hits++;
+                        }
+                    if (total == 0) continue;
+                    int score = hits * 1000 / total;
+                    if (sx == 0 && sy == 0) bestAt0 = score;
+                    if (score > best || (score == best && Math.Abs(sx) + Math.Abs(sy) < Math.Abs(bx) + Math.Abs(by))) { best = score; bx = sx; by = sy; }
+                }
+            // a real move lines up clearly better than not moving at all
+            return best > 250 && best >= bestAt0 + 100;
+        }
+
+        /// <summary>A learned area much bigger than a holosight is the world, not the holo: forget it.</summary>
+        void DropBigBlobs()
+        {
+            int w = TilesW, h = TilesH, n = w * h;
+            float side = Math.Max(4f, 0.11f * screenH / HoloMatcher.Tile);
+            int maxTiles = (int)(side * side);
+            Array.Clear(seen, 0, n);
+            var blob = new List<int>();
+            for (int s0 = 0; s0 < n; s0++)
+            {
+                if (seen[s0] || score[s0] < 0.5f) continue;
+                blob.Clear();
+                int sp = 0; stack[sp++] = s0; seen[s0] = true;
+                while (sp > 0)
+                {
+                    int i = stack[--sp]; blob.Add(i);
+                    int x = i % w, y = i / w;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int xx = x + dx, yy = y + dy;
+                            if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+                            int j = yy * w + xx;
+                            if (seen[j] || score[j] < 0.5f) continue;
+                            seen[j] = true; stack[sp++] = j;
+                        }
+                }
+                if (blob.Count > maxTiles) foreach (int i in blob) score[i] = 0;
+            }
+        }
+
+        void BuildZone()
+        {
+            int w = TilesW, h = TilesH, learned = 0;
+            Array.Clear(Zone, 0, Zone.Length);
+            for (int ty = 0; ty < h; ty++)
+                for (int tx = 0; tx < w; tx++)
+                {
+                    int i = ty * w + tx;
+                    if (center[i]) Zone[i] = 255;
+                    if (score[i] < 0.5f) continue;
+                    learned++;
+                    // learned tiles plus one tile around them, for the gun's sway
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++)
+                        {
+                            int x = tx + dx, y = ty + dy;
+                            if (x >= 0 && y >= 0 && x < w && y < h) Zone[y * w + x] = 255;
+                        }
+                }
+            LearnedTiles = learned;
+        }
     }
 
     /// <summary>
@@ -182,6 +477,12 @@ namespace Vivid
         public volatile RunState State = RunState.Off;
         public volatile int Fps;
         public volatile float FrameMs;
+        /// <summary>The reticle was seen where the holo is in the last frame.</summary>
+        public volatile bool HoloFound;
+        /// <summary>The hip-fire holo's spot has been learned (more than the aiming circle is watched).</summary>
+        public volatile bool HipLearned;
+        // what's been learned about where the holo sits; kept while the capture restarts (alt-tab, display changes)
+        readonly HoloZones zones = new HoloZones();
         /// <summary>Why it can't run right now (shown on the Holo page), or null.</summary>
         public volatile string Problem;
 
@@ -361,7 +662,7 @@ namespace Vivid
                         if (Environment.TickCount - lastFail < 2000) { wake.WaitOne(200); continue; }
                         try
                         {
-                            gpu = HoloGpu.ForMonitor(monitor);
+                            gpu = HoloGpu.ForMonitor(monitor, zones);
                             Place();
                             gpu.AttachWindow(hwnd);
                             gpu.StartCapture();
@@ -392,6 +693,8 @@ namespace Vivid
                         lastFresh = Environment.TickCount;
                         frames++;
                         FrameMs = gpu.LastWorkMs;
+                        HoloFound = zones.Found;
+                        HipLearned = zones.LearnedTiles > 0;
                     }
                     else if (shown && Environment.TickCount - lastFresh > 600)
                     {
